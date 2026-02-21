@@ -5,9 +5,10 @@ interface CardProps {
   className?: string
   onClick?: () => void
   hover?: boolean
+  style?: React.CSSProperties
 }
 
-export default function Card({ children, className, onClick, hover = false }: CardProps) {
+export default function Card({ children, className, onClick, hover = false, style }: CardProps) {
   return (
     <div 
       className={clsx(
@@ -17,6 +18,7 @@ export default function Card({ children, className, onClick, hover = false }: Ca
         className
       )}
       onClick={onClick}
+      style={style}
     >
       {children}
     </div>

@@ -64,6 +64,8 @@ function DefinitionTerm({
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLSpanElement>(null)
   const popRef = useRef<HTMLDivElement>(null)
+  const [nudge, setNudge] = useState(0) // horizontal px offset to keep popover on screen
+  const [flipped, setFlipped] = useState(false) // true = show below the term instead of above
 
   // Close on click outside
   useEffect(() => {
@@ -82,11 +84,44 @@ function DefinitionTerm({
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
 
+  // Adjust popover position to stay within viewport
+  useEffect(() => {
+    if (!open || !popRef.current || !ref.current) return
+
+    const popRect = popRef.current.getBoundingClientRect()
+    const termRect = ref.current.getBoundingClientRect()
+    const pad = 8
+
+    // Check vertical: if popup goes above viewport, flip to below
+    if (!flipped && popRect.top < pad) {
+      setFlipped(true)
+      return // re-render will re-run this effect with new position
+    }
+    // If flipped but now it would fit above (e.g. user scrolled), unflip
+    if (flipped) {
+      // Estimate where it would be if above: termRect.top - popRect.height - 8 (margin)
+      const wouldBeTop = termRect.top - popRect.height - 8
+      if (wouldBeTop >= pad) {
+        setFlipped(false)
+        return
+      }
+    }
+
+    // Check horizontal
+    let offset = 0
+    if (popRect.left < pad) {
+      offset = pad - popRect.left
+    } else if (popRect.right > window.innerWidth - pad) {
+      offset = (window.innerWidth - pad) - popRect.right
+    }
+    if (offset !== nudge) setNudge(offset)
+  }, [open, flipped]) // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <span className="relative inline">
       <span
         ref={ref}
-        onClick={() => setOpen(!open)}
+        onClick={() => { setNudge(0); setFlipped(false); setOpen(!open) }}
         className="definition-term cursor-pointer border-b-2 border-dashed border-bloom-orange/50 text-bloom-orange hover:border-bloom-orange hover:text-bloom-orange/80 transition-colors duration-200"
       >
         {children}
@@ -95,7 +130,10 @@ function DefinitionTerm({
       {open && (
         <div
           ref={popRef}
-          className="definition-popover absolute z-50 bottom-full left-1/2 -translate-x-1/2 mb-2 w-72 max-w-[90vw]"
+          className={`definition-popover absolute z-50 left-1/2 w-72 max-w-[90vw] ${
+            flipped ? 'top-full mt-2' : 'bottom-full mb-2'
+          }`}
+          style={{ transform: `translateX(calc(-50% + ${nudge}px))` }}
         >
           <div className="bg-white rounded-xl shadow-xl border border-slate-200 p-4 animate-pop-in">
             <div className="flex items-start justify-between gap-2 mb-1">
@@ -108,8 +146,18 @@ function DefinitionTerm({
               </button>
             </div>
             <p className="text-sm text-bloom-text leading-relaxed">{definition}</p>
-            {/* Little arrow pointing down */}
-            <div className="absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-l-8 border-r-8 border-t-8 border-l-transparent border-r-transparent border-t-white" />
+            {/* Arrow pointing toward the term */}
+            {flipped ? (
+              <div
+                className="absolute bottom-full w-0 h-0 border-l-8 border-r-8 border-b-8 border-l-transparent border-r-transparent border-b-white"
+                style={{ left: `calc(50% - ${nudge}px)`, transform: 'translateX(-50%)' }}
+              />
+            ) : (
+              <div
+                className="absolute top-full w-0 h-0 border-l-8 border-r-8 border-t-8 border-l-transparent border-r-transparent border-t-white"
+                style={{ left: `calc(50% - ${nudge}px)`, transform: 'translateX(-50%)' }}
+              />
+            )}
           </div>
         </div>
       )}
@@ -366,7 +414,7 @@ function InteractiveBlock({ block }: { block: Extract<ContentBlock, { type: 'int
   }
 
   return (
-    <div className="my-3 animate-slide-up">
+    <div className="my-3 animate-slide-up" data-interactive="true">
       <Component {...(block.props || {})} />
     </div>
   )

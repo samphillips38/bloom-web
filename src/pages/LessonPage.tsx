@@ -252,8 +252,13 @@ export default function LessonPage() {
     const isAtTop = () =>
       el.scrollTop < 5
 
+    let touchInsideInteractive = false
+
     const onTouchStart = (e: TouchEvent) => {
       if (isTransitioningRef.current) return
+      // If the touch started inside an interactive component, don't hijack the gesture
+      const target = e.target as HTMLElement
+      touchInsideInteractive = !!target.closest?.('[data-interactive]')
       touchStartX = e.touches[0].clientX
       touchStartY = e.touches[0].clientY
       touchAxis = null
@@ -261,6 +266,7 @@ export default function LessonPage() {
     }
 
     const onTouchMove = (e: TouchEvent) => {
+      if (touchInsideInteractive) return // let interactive components handle their own touches
       if (touchStartX === null || touchStartY === null || isTransitioningRef.current) return
 
       const dx = e.touches[0].clientX - touchStartX  // positive = swipe right
@@ -367,6 +373,7 @@ export default function LessonPage() {
       touchStartY = null
       touchAxis = null
       touchDir = null
+      touchInsideInteractive = false
     }
 
     const onWheel = (e: WheelEvent) => {

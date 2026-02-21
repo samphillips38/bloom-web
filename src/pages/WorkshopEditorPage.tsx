@@ -1462,8 +1462,12 @@ function PreviewOverlay({
 
     const H_SWIPE_THRESHOLD = 80
 
+    let hTouchInsideInteractive = false
+
     const onHTouchStart = (e: TouchEvent) => {
       if (isTransitioningRef.current) return
+      const target = e.target as HTMLElement
+      hTouchInsideInteractive = !!target.closest?.('[data-interactive]')
       hSwipeStartX = e.touches[0].clientX
       hSwipeStartY = e.touches[0].clientY
       hSwipeActive = false
@@ -1471,6 +1475,7 @@ function PreviewOverlay({
     }
 
     const onHTouchMove = (e: TouchEvent) => {
+      if (hTouchInsideInteractive) return
       if (hSwipeStartX === null || hSwipeStartY === null || isTransitioningRef.current) return
       const dx = e.touches[0].clientX - hSwipeStartX // positive = swipe right (back), negative = swipe left (forward)
       const dy = Math.abs(hSwipeStartY - e.touches[0].clientY)
@@ -1513,6 +1518,7 @@ function PreviewOverlay({
       hSwipeStartY = null
       hSwipeActive = false
       hSwipeDir = null
+      hTouchInsideInteractive = false
     }
 
     el.addEventListener('touchstart', onHTouchStart, { passive: true })
