@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Brain, ChevronRight, Sparkles } from 'lucide-react'
 import { api, Course, CourseWithLevels } from '../lib/api'
@@ -12,6 +12,7 @@ export default function HomePage() {
   const [selectedCourse, setSelectedCourse] = useState<CourseWithLevels | null>(null)
   const [currentIndex, setCurrentIndex] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
+  const [swipeOffset, setSwipeOffset] = useState(0) // px offset during swipe
   
   useEffect(() => {
     loadData()
@@ -33,18 +34,105 @@ export default function HomePage() {
     }
   }
   
-  async function selectCourse(index: number) {
-    if (index === currentIndex || !courses[index]) return
+  // Use refs so touch handlers always see latest values
+  const currentIndexRef = useRef(currentIndex)
+  currentIndexRef.current = currentIndex
+  const coursesRef = useRef(courses)
+  coursesRef.current = courses
+
+  const selectCourse = useCallback(async (index: number) => {
+    if (index === currentIndexRef.current || !coursesRef.current[index]) return
     setCurrentIndex(index)
     
     try {
-      const { course } = await api.getCourse(courses[index].id)
+      const { course } = await api.getCourse(coursesRef.current[index].id)
       setSelectedCourse(course)
     } catch (error) {
       console.error('Failed to load course:', error)
     }
-  }
+  }, [])
   
+  // Swipe handling for recommended course card
+  const cardRef = useRef<HTMLDivElement>(null)
+  const selectCourseRef = useRef(selectCourse)
+  selectCourseRef.current = selectCourse
+
+  useEffect(() => {
+    const el = cardRef.current
+    if (!el) return
+
+    let startX: number | null = null
+    let startY: number | null = null
+    let swiping = false
+    let didSwipe = false
+
+    const onTouchStart = (e: TouchEvent) => {
+      startX = e.touches[0].clientX
+      startY = e.touches[0].clientY
+      swiping = false
+      didSwipe = false
+    }
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (startX === null || startY === null) return
+      const dx = e.touches[0].clientX - startX
+      const dy = Math.abs(e.touches[0].clientY - startY)
+      if (!swiping && Math.abs(dx) > 15 && Math.abs(dx) > dy * 1.3) {
+        swiping = true
+      }
+      if (swiping) {
+        e.preventDefault()
+        // Clamp the offset so it feels bounded
+        const maxDrag = 120
+        const clamped = Math.sign(dx) * Math.min(Math.abs(dx), maxDrag)
+        setSwipeOffset(clamped)
+      }
+    }
+
+    const onTouchEnd = (e: TouchEvent) => {
+      if (!swiping || startX === null) {
+        startX = null
+        startY = null
+        setSwipeOffset(0)
+        return
+      }
+      const endX = e.changedTouches[0]?.clientX ?? startX
+      const dx = endX - startX
+      const threshold = 50
+      const idx = currentIndexRef.current
+      const len = coursesRef.current.length
+
+      if (dx < -threshold && idx < len - 1) {
+        selectCourseRef.current(idx + 1)
+        didSwipe = true
+      } else if (dx > threshold && idx > 0) {
+        selectCourseRef.current(idx - 1)
+        didSwipe = true
+      }
+
+      startX = null
+      startY = null
+      swiping = false
+      setSwipeOffset(0)
+
+      // Prevent the tap/click from firing after a swipe
+      if (didSwipe) {
+        const suppress = (ev: Event) => { ev.stopPropagation(); ev.preventDefault() }
+        el.addEventListener('click', suppress, { capture: true, once: true })
+      }
+    }
+
+    el.addEventListener('touchstart', onTouchStart, { passive: true })
+    el.addEventListener('touchmove', onTouchMove, { passive: false })
+    el.addEventListener('touchend', onTouchEnd, { passive: true })
+
+    return () => {
+      el.removeEventListener('touchstart', onTouchStart)
+      el.removeEventListener('touchmove', onTouchMove)
+      el.removeEventListener('touchend', onTouchEnd)
+    }
+  }, [])
+
   const course = courses[currentIndex]
   const themeColor = course?.themeColor || '#FF6B35'
   const firstLessonId = selectedCourse?.levels[0]?.lessons[0]?.id
@@ -61,9 +149,19 @@ export default function HomePage() {
     <div className="space-y-6 animate-fade-in">
       {/* Recommended Course Card */}
       {course && (
+        <div
+          ref={cardRef}
+          className="overflow-hidden"
+          style={{ touchAction: 'pan-y' }}
+        >
         <Card 
           className="text-center py-8 cursor-pointer hover:shadow-bloom-lg transition-shadow"
           onClick={() => navigate(`/courses/${course.id}`)}
+          style={{
+            transform: swipeOffset ? `translateX(${swipeOffset}px)` : undefined,
+            opacity: swipeOffset ? 1 - Math.abs(swipeOffset) / 300 : 1,
+            transition: swipeOffset ? 'none' : 'transform 0.3s ease, opacity 0.3s ease',
+          }}
         >
           {/* Recommended Badge */}
           <span 
@@ -126,6 +224,7 @@ export default function HomePage() {
             </div>
           )}
         </Card>
+        </div>
       )}
       
       {/* Lessons Section */}
