@@ -5,7 +5,7 @@ import Button from '../components/Button'
 type PlanType = 'monthly' | 'yearly'
 
 const plans = {
-  monthly: { price: '$24.99', period: '/month' },
+  monthly: { price: '$24.99', period: '/month', savings: '' },
   yearly: { price: '$149.99', period: '/year', savings: 'Save 50%' },
 }
 
