@@ -8,6 +8,9 @@ import CourseDetailPage from './pages/CourseDetailPage'
 import LessonPage from './pages/LessonPage'
 import PremiumPage from './pages/PremiumPage'
 import ProfilePage from './pages/ProfilePage'
+import WorkshopPage from './pages/WorkshopPage'
+import WorkshopEditorPage from './pages/WorkshopEditorPage'
+import WorkshopBrowsePage from './pages/WorkshopBrowsePage'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth()
@@ -42,6 +45,10 @@ function App() {
         <Route index element={<HomePage />} />
         <Route path="courses" element={<CoursesPage />} />
         <Route path="courses/:courseId" element={<CourseDetailPage />} />
+        <Route path="workshop" element={<WorkshopPage />} />
+        <Route path="workshop/new" element={<WorkshopEditorPage />} />
+        <Route path="workshop/edit/:lessonId" element={<WorkshopEditorPage />} />
+        <Route path="workshop/browse" element={<WorkshopBrowsePage />} />
         <Route path="premium" element={<PremiumPage />} />
         <Route path="profile" element={<ProfilePage />} />
       </Route>

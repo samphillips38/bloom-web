@@ -4,6 +4,7 @@ import { Brain, ChevronRight, Sparkles } from 'lucide-react'
 import { api, Course, CourseWithLevels } from '../lib/api'
 import Card from '../components/Card'
 import Button from '../components/Button'
+import { AIBadge, CreatorTag } from './WorkshopPage'
 
 export default function HomePage() {
   const navigate = useNavigate()
@@ -79,6 +80,12 @@ export default function HomePage() {
           <span className="text-sm font-bold" style={{ color: themeColor }}>
             LEVEL 1
           </span>
+
+          {/* Creator + AI tags */}
+          <div className="flex items-center justify-center gap-2 mt-2">
+            {course.creatorName && <CreatorTag name={course.creatorName} />}
+            {course.aiInvolvement && <AIBadge involvement={course.aiInvolvement} />}
+          </div>
           
           {/* Illustration */}
           <div className="my-8 flex justify-center">

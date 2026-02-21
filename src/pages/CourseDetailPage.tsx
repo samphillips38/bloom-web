@@ -5,6 +5,7 @@ import { api, CourseWithLevels, UserProgress } from '../lib/api'
 import Card from '../components/Card'
 import Button from '../components/Button'
 import LevelBadge from '../components/LevelBadge'
+import { AIBadge, CreatorTag } from './WorkshopPage'
 
 export default function CourseDetailPage() {
   const { courseId } = useParams()
@@ -105,6 +106,12 @@ export default function CourseDetailPage() {
           <Brain size={64} style={{ color: themeColor }} />
         </div>
         
+        {/* Creator + AI tags */}
+        <div className="flex items-center justify-center gap-2 mt-3 mb-2">
+          {course.creatorName && <CreatorTag name={course.creatorName} />}
+          {course.aiInvolvement && <AIBadge involvement={course.aiInvolvement} />}
+        </div>
+
         {/* Level Badge */}
         {course.levels[0] && (
           <LevelBadge 

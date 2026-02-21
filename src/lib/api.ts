@@ -34,6 +34,8 @@ export interface Course {
   exerciseCount: number
   isRecommended: boolean
   collaborators?: string[]
+  creatorName?: string
+  aiInvolvement?: 'none' | 'collaboration' | 'full'
 }
 
 export interface CourseWithLevels extends Course {
@@ -69,16 +71,124 @@ export interface LessonContent {
   contentData: ContentData
 }
 
-export type ContentData = 
+// ── Rich Content Types ──
+
+export interface TextSegment {
+  text: string
+  bold?: boolean
+  italic?: boolean
+  color?: 'accent' | 'secondary' | 'success' | 'warning' | 'blue' | 'purple'
+  underline?: boolean
+  definition?: string
+  latex?: boolean
+}
+
+export type ContentBlock =
+  | { type: 'heading'; segments: TextSegment[]; level?: 1 | 2 | 3 }
+  | { type: 'paragraph'; segments: TextSegment[] }
+  | { type: 'image'; src: string; alt?: string; caption?: string; style?: 'full' | 'inline' | 'icon' }
+  | { type: 'math'; latex: string; caption?: string }
+  | { type: 'callout'; style: 'info' | 'tip' | 'warning' | 'example'; title?: string; segments: TextSegment[] }
+  | { type: 'bulletList'; items: TextSegment[][] }
+  | { type: 'animation'; src: string; autoplay?: boolean; loop?: boolean; caption?: string }
+  | { type: 'interactive'; componentId: string; props?: Record<string, unknown> }
+  | { type: 'spacer'; size?: 'sm' | 'md' | 'lg' }
+  | { type: 'divider' }
+
+export type ContentData =
+  | { type: 'page'; blocks: ContentBlock[] }
+  | { type: 'question'; question: string; questionSegments?: TextSegment[]; options: string[]; optionSegments?: TextSegment[][]; correctIndex: number; explanation?: string; explanationSegments?: TextSegment[] }
+  // Legacy types for backward compatibility
   | { type: 'text'; text: string; formatting?: { bold?: boolean } }
   | { type: 'image'; url: string; caption?: string }
-  | { type: 'question'; question: string; options: string[]; correctIndex: number; explanation?: string }
 
 export interface UserProgress {
   id: string
   lessonId: string
   completed: boolean
   score?: number
+}
+
+// ── Workshop Types ──
+
+export interface WorkshopLesson {
+  id: string
+  authorId: string
+  title: string
+  description?: string
+  iconUrl?: string
+  themeColor?: string
+  visibility: 'private' | 'public'
+  status: 'draft' | 'published'
+  editPolicy: 'open' | 'approval'
+  aiInvolvement: 'none' | 'collaboration' | 'full'
+  isPromoted: boolean
+  publishedAt?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface WorkshopLessonSummary extends WorkshopLesson {
+  authorName: string
+  pageCount: number
+}
+
+export interface WorkshopLessonContent {
+  id: string
+  workshopLessonId: string
+  orderIndex: number
+  contentType: string
+  contentData: ContentData
+  authorId: string
+  sources: SourceReference[]
+  createdAt: string
+  updatedAt: string
+}
+
+export interface WorkshopLessonWithContent extends WorkshopLesson {
+  content: WorkshopLessonContent[]
+  authorName: string
+  authorAvatarUrl?: string
+}
+
+export interface SourceReference {
+  title: string
+  url?: string
+  description?: string
+}
+
+export interface WorkshopEditSuggestion {
+  id: string
+  workshopLessonId: string
+  contentId?: string
+  suggesterId: string
+  suggestedData: unknown
+  status: 'pending' | 'approved' | 'rejected'
+  reviewerId?: string
+  reviewedAt?: string
+  suggesterName: string
+  createdAt: string
+}
+
+export interface ContentPageMetadata {
+  contentId: string
+  authorName: string
+  authorAvatarUrl?: string
+  sources: SourceReference[]
+  lastEdited: string
+  editors: { name: string; avatarUrl?: string; editedAt: string }[]
+}
+
+export interface LessonMetadata {
+  lesson: {
+    authorName: string
+    authorAvatarUrl?: string
+    totalEdits: number
+    createdAt: string
+    updatedAt: string
+    aiInvolvement: string
+  }
+  pages: ContentPageMetadata[]
 }
 
 class ApiClient {
@@ -162,6 +272,142 @@ class ApiClient {
       method: 'POST',
       body: JSON.stringify({ lessonId, completed, score }),
     })
+  }
+
+  // Workshop
+  async getMyWorkshopLessons() {
+    return this.request<{ lessons: WorkshopLessonSummary[] }>('/workshop/my-lessons')
+  }
+
+  async createWorkshopLesson(data: {
+    title: string
+    description?: string
+    iconUrl?: string
+    themeColor?: string
+    visibility?: string
+    editPolicy?: string
+    aiInvolvement?: string
+  }) {
+    return this.request<{ lesson: WorkshopLesson }>('/workshop/lessons', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+  }
+
+  async getWorkshopLesson(id: string) {
+    return this.request<{ lesson: WorkshopLessonWithContent }>(`/workshop/lessons/${id}`)
+  }
+
+  async updateWorkshopLesson(id: string, data: Partial<{
+    title: string
+    description: string
+    iconUrl: string
+    themeColor: string
+    visibility: string
+    editPolicy: string
+    aiInvolvement: string
+  }>) {
+    return this.request<{ lesson: WorkshopLesson }>(`/workshop/lessons/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    })
+  }
+
+  async deleteWorkshopLesson(id: string) {
+    return this.request<{ deleted: boolean }>(`/workshop/lessons/${id}`, {
+      method: 'DELETE',
+    })
+  }
+
+  async publishWorkshopLesson(id: string) {
+    return this.request<{ lesson: WorkshopLesson }>(`/workshop/lessons/${id}/publish`, {
+      method: 'POST',
+    })
+  }
+
+  async addWorkshopContent(lessonId: string, data: {
+    contentType: string
+    contentData: ContentData
+    sources?: SourceReference[]
+  }) {
+    return this.request<{ content: WorkshopLessonContent }>(`/workshop/lessons/${lessonId}/content`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+  }
+
+  async updateWorkshopContent(lessonId: string, contentId: string, data: {
+    contentType?: string
+    contentData?: ContentData
+    sources?: SourceReference[]
+  }) {
+    return this.request<{ content: WorkshopLessonContent }>(`/workshop/lessons/${lessonId}/content/${contentId}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    })
+  }
+
+  async reorderWorkshopContent(lessonId: string, contentIds: string[]) {
+    return this.request<{ reordered: boolean }>(`/workshop/lessons/${lessonId}/content/reorder`, {
+      method: 'PUT',
+      body: JSON.stringify({ contentIds }),
+    })
+  }
+
+  async deleteWorkshopContent(lessonId: string, contentId: string) {
+    return this.request<{ deleted: boolean }>(`/workshop/lessons/${lessonId}/content/${contentId}`, {
+      method: 'DELETE',
+    })
+  }
+
+  async getWorkshopLessonMetadata(lessonId: string) {
+    return this.request<{ metadata: LessonMetadata }>(`/workshop/lessons/${lessonId}/metadata`)
+  }
+
+  async getLessonMetadata(lessonId: string) {
+    return this.request<{ metadata: LessonMetadata }>(`/courses/lessons/${lessonId}/metadata`)
+  }
+
+  async getWorkshopEditHistory(lessonId: string) {
+    return this.request<{ history: unknown[] }>(`/workshop/lessons/${lessonId}/history`)
+  }
+
+  async submitEditSuggestion(lessonId: string, data: {
+    contentId?: string
+    suggestedData: unknown
+  }) {
+    return this.request<{ suggestion: WorkshopEditSuggestion }>(`/workshop/lessons/${lessonId}/suggest`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+  }
+
+  async getEditSuggestions(lessonId: string, status?: string) {
+    const query = status ? `?status=${status}` : ''
+    return this.request<{ suggestions: WorkshopEditSuggestion[] }>(`/workshop/lessons/${lessonId}/suggestions${query}`)
+  }
+
+  async reviewEditSuggestion(suggestionId: string, action: 'approved' | 'rejected') {
+    return this.request<{ suggestion: WorkshopEditSuggestion }>(`/workshop/suggestions/${suggestionId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ action }),
+    })
+  }
+
+  async generateAIDraft(topic: string, pageCount?: number) {
+    return this.request<{ pages: ContentData[] }>('/workshop/ai-draft', {
+      method: 'POST',
+      body: JSON.stringify({ topic, pageCount }),
+    })
+  }
+
+  async browseWorkshopLessons(opts?: { search?: string; limit?: number; offset?: number }) {
+    const params = new URLSearchParams()
+    if (opts?.search) params.set('search', opts.search)
+    if (opts?.limit) params.set('limit', String(opts.limit))
+    if (opts?.offset) params.set('offset', String(opts.offset))
+    const query = params.toString() ? `?${params.toString()}` : ''
+    return this.request<{ lessons: WorkshopLessonSummary[]; total: number }>(`/workshop/browse${query}`)
   }
 }
 

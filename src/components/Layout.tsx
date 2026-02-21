@@ -1,5 +1,5 @@
 import { Outlet, NavLink } from 'react-router-dom'
-import { Home, BookOpen, Crown, User } from 'lucide-react'
+import { Home, BookOpen, Crown, User, Hammer } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import StatBadge from './StatBadge'
 
@@ -44,6 +44,7 @@ export default function Layout() {
           <div className="flex items-center justify-around py-2">
             <NavItem to="/" icon={Home} label="Home" />
             <NavItem to="/courses" icon={BookOpen} label="Courses" />
+            <NavItem to="/workshop" icon={Hammer} label="Workshop" />
             <NavItem to="/premium" icon={Crown} label="Premium" />
             <NavItem to="/profile" icon={User} label="You" />
           </div>
