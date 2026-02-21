@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
-import { X, Zap, Check, Lightbulb, ChevronRight, ChevronDown, ChevronUp, ChevronLeft, Sparkles } from 'lucide-react'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
+import { X, Zap, Check, Lightbulb, ChevronRight, ChevronDown, ChevronUp, ChevronLeft, Sparkles, Info } from 'lucide-react'
 import { api, LessonWithContent, LessonContent, ContentData } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import ProgressBar from '../components/ProgressBar'
+import RichContentRenderer, { RichText } from '../components/RichContentRenderer'
+import MetadataPanel from '../components/workshop/MetadataPanel'
 
 const PULL_THRESHOLD = 120
 
@@ -22,24 +24,38 @@ export default function LessonPage() {
 
   // Pull-to-advance/go-back state
   const [pullDistance, setPullDistance] = useState(0)           // always >= 0
-  const [scrollDir, setScrollDir] = useState<'forward' | 'backward'>('forward')
+  const [scrollDir, setScrollDir] = useState<'forward' | 'backward' | 'metadata'>('forward')
   const [isTransitioning, setIsTransitioning] = useState(false)
   const [pageAnim, setPageAnim] = useState<'idle' | 'exit' | 'enter'>('enter')
   const [confirmed, setConfirmed] = useState(false)
-  const [animDir, setAnimDir] = useState<'forward' | 'backward'>('forward') // direction of current animation
+  const [animDir, setAnimDir] = useState<'forward' | 'backward' | 'metadata'>('forward') // direction of current animation
+
+  // Metadata panel state (swipe-right to reveal)
+  const [metadataOpen, setMetadataOpen] = useState(false)
+  const [workshopLessonId, setWorkshopLessonId] = useState<string | null>(null)
+  const [searchParams] = useSearchParams()
+
+  // Check if this lesson is from a workshop (workshop lessons pass ?workshop=id)
+  useEffect(() => {
+    const wId = searchParams.get('workshop')
+    if (wId) setWorkshopLessonId(wId)
+  }, [searchParams])
 
   // Refs for gesture handling (avoid stale closures)
   const containerRef = useRef<HTMLDivElement>(null)
+  const footerRef = useRef<HTMLElement>(null)
   const isTransitioningRef = useRef(false)
   const canAdvanceRef = useRef(false)
   const canGoBackRef = useRef(false)
   const doAdvanceRef = useRef<() => void>(() => {})
   const doGoBackRef = useRef<() => void>(() => {})
   const pullDistanceRef = useRef(0)
-  const scrollDirRef = useRef<'forward' | 'backward'>('forward')
+  const scrollDirRef = useRef<'forward' | 'backward' | 'metadata'>('forward')
   const wheelAccumRef = useRef(0)
-  const wheelDirRef = useRef<'forward' | 'backward'>('forward')
+  const wheelDirRef = useRef<'forward' | 'backward' | 'metadata'>('forward')
   const wheelTimeoutRef = useRef<ReturnType<typeof setTimeout>>()
+  const metadataOpenRef = useRef(false)
+  const doOpenMetadataRef = useRef<() => void>(() => {})
 
   // ── Load lesson ──
   useEffect(() => {
@@ -89,6 +105,7 @@ export default function LessonPage() {
   canGoBackRef.current = !isFirst && !isTransitioningRef.current
   pullDistanceRef.current = pullDistance
   scrollDirRef.current = scrollDir
+  metadataOpenRef.current = metadataOpen
 
   // ── Advance to next page ──
   const doAdvance = useCallback(async () => {
@@ -162,8 +179,30 @@ export default function LessonPage() {
     setIsTransitioning(false)
   }, [isFirst])
 
+  // ── Open metadata panel (same pull pattern as advance/goBack) ──
+  const doOpenMetadata = useCallback(async () => {
+    if (isTransitioningRef.current || metadataOpenRef.current) return
+    isTransitioningRef.current = true
+    setIsTransitioning(true)
+    wheelAccumRef.current = 0
+
+    setAnimDir('metadata')
+    setConfirmed(true)
+
+    // Let the button confirm animation play
+    await new Promise(r => setTimeout(r, 350))
+    setPullDistance(0)
+    setConfirmed(false)
+    setMetadataOpen(true)
+
+    setScrollDir('forward')
+    isTransitioningRef.current = false
+    setIsTransitioning(false)
+  }, [])
+
   doAdvanceRef.current = doAdvance
   doGoBackRef.current = doGoBack
+  doOpenMetadataRef.current = doOpenMetadata
 
   // ── Answer selection ──
   function handleAnswerSelect(index: number) {
@@ -196,13 +235,16 @@ export default function LessonPage() {
     }
   }, [showExplanation])
 
-  // ── Touch & Wheel gesture handlers ──
+  // ── Unified Touch & Wheel gesture handlers ──
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
 
+    // Single set of touch tracking state — decides axis ONCE per gesture
+    let touchStartX: number | null = null
     let touchStartY: number | null = null
-    let touchDir: 'forward' | 'backward' | null = null
+    let touchAxis: 'horizontal' | 'vertical' | null = null // locked after first significant move
+    let touchDir: 'forward' | 'backward' | 'metadata' | null = null
 
     const isAtBottom = () =>
       el.scrollHeight - el.scrollTop - el.clientHeight < 5
@@ -212,52 +254,107 @@ export default function LessonPage() {
 
     const onTouchStart = (e: TouchEvent) => {
       if (isTransitioningRef.current) return
+      touchStartX = e.touches[0].clientX
       touchStartY = e.touches[0].clientY
+      touchAxis = null
       touchDir = null
     }
 
     const onTouchMove = (e: TouchEvent) => {
-      if (touchStartY === null || isTransitioningRef.current) return
-      const delta = touchStartY - e.touches[0].clientY // positive = scrolling down (forward)
+      if (touchStartX === null || touchStartY === null || isTransitioningRef.current) return
 
-      // Determine direction on first significant move
-      if (touchDir === null) {
-        if (delta > 10 && isAtBottom() && canAdvanceRef.current) {
-          touchDir = 'forward'
-        } else if (delta < -10 && isAtTop() && canGoBackRef.current) {
-          touchDir = 'backward'
+      const dx = e.touches[0].clientX - touchStartX  // positive = swipe right
+      const dy = touchStartY - e.touches[0].clientY   // positive = scroll down (finger moves up)
+      const absDx = Math.abs(dx)
+      const absDy = Math.abs(dy)
+
+      // ── Lock axis on first significant movement ──
+      if (touchAxis === null) {
+        if (absDx < 12 && absDy < 12) return // not enough movement yet
+
+        if (absDx > absDy * 1.2) {
+          // Horizontal dominates
+          touchAxis = 'horizontal'
+          if (dx > 0 && !metadataOpenRef.current) {
+            touchDir = 'metadata'
+          } else if (dx < 0 && canAdvanceRef.current) {
+            touchDir = 'forward'
+          } else {
+            touchDir = null
+          }
+        } else if (absDy > absDx * 1.2) {
+          // Vertical dominates
+          touchAxis = 'vertical'
+          if (dy > 0 && isAtBottom() && canAdvanceRef.current) {
+            touchDir = 'forward'
+          } else if (dy < 0 && isAtTop() && canGoBackRef.current) {
+            touchDir = 'backward'
+          } else {
+            touchDir = null // normal scroll, don't interfere
+          }
         } else {
-          return
+          return // ambiguous, wait for more movement
         }
+
+        if (touchDir === null) return
       }
 
-      if (touchDir === 'forward') {
-        if (!canAdvanceRef.current || !isAtBottom()) {
-          if (pullDistanceRef.current > 0) { setPullDistance(0); setScrollDir('forward') }
-          return
-        }
+      if (touchDir === null) return
+
+      // ── HORIZONTAL axis ──
+      if (touchAxis === 'horizontal') {
         e.preventDefault()
-        const dist = Math.max(0, delta - 10)
+        const dist = Math.max(0, absDx - 12)
         setPullDistance(dist)
-        setScrollDir('forward')
+        setScrollDir(touchDir)
         if (dist >= PULL_THRESHOLD) {
+          touchStartX = null
           touchStartY = null
+          touchAxis = null
+          if (touchDir === 'metadata') {
+            doOpenMetadataRef.current()
+          } else {
+            doAdvanceRef.current()
+          }
           touchDir = null
-          doAdvanceRef.current()
         }
-      } else if (touchDir === 'backward') {
-        if (!canGoBackRef.current || !isAtTop()) {
-          if (pullDistanceRef.current > 0) { setPullDistance(0); setScrollDir('forward') }
-          return
-        }
-        e.preventDefault()
-        const dist = Math.max(0, -delta - 10)
-        setPullDistance(dist)
-        setScrollDir('backward')
-        if (dist >= PULL_THRESHOLD) {
-          touchStartY = null
-          touchDir = null
-          doGoBackRef.current()
+        return
+      }
+
+      // ── VERTICAL axis ──
+      if (touchAxis === 'vertical') {
+        if (touchDir === 'forward') {
+          if (!canAdvanceRef.current || !isAtBottom()) {
+            if (pullDistanceRef.current > 0) { setPullDistance(0); setScrollDir('forward') }
+            return
+          }
+          e.preventDefault()
+          const dist = Math.max(0, dy - 12)
+          setPullDistance(dist)
+          setScrollDir('forward')
+          if (dist >= PULL_THRESHOLD) {
+            touchStartX = null
+            touchStartY = null
+            touchAxis = null
+            touchDir = null
+            doAdvanceRef.current()
+          }
+        } else if (touchDir === 'backward') {
+          if (!canGoBackRef.current || !isAtTop()) {
+            if (pullDistanceRef.current > 0) { setPullDistance(0); setScrollDir('forward') }
+            return
+          }
+          e.preventDefault()
+          const dist = Math.max(0, -dy - 12)
+          setPullDistance(dist)
+          setScrollDir('backward')
+          if (dist >= PULL_THRESHOLD) {
+            touchStartX = null
+            touchStartY = null
+            touchAxis = null
+            touchDir = null
+            doGoBackRef.current()
+          }
         }
       }
     }
@@ -266,7 +363,9 @@ export default function LessonPage() {
       if (pullDistanceRef.current > 0 && pullDistanceRef.current < PULL_THRESHOLD) {
         setPullDistance(0)
       }
+      touchStartX = null
       touchStartY = null
+      touchAxis = null
       touchDir = null
     }
 
@@ -346,6 +445,65 @@ export default function LessonPage() {
           }
         }
       }
+
+      // ── Horizontal scroll (trackpad swipe left/right) ──
+      const scrollingLeft = e.deltaX < 0  // swipe right gesture → metadata
+      const scrollingRight = e.deltaX > 0 // swipe left gesture → forward
+
+      if (scrollingRight && canAdvanceRef.current && Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+        if (wheelDirRef.current !== 'forward') {
+          wheelAccumRef.current = 0
+          setPullDistance(0)
+        }
+        wheelDirRef.current = 'forward'
+        setScrollDir('forward')
+
+        e.preventDefault()
+        wheelAccumRef.current += Math.abs(e.deltaX) * 1.2
+        wheelAccumRef.current = Math.max(0, wheelAccumRef.current)
+        setPullDistance(wheelAccumRef.current)
+
+        if (wheelAccumRef.current >= PULL_THRESHOLD) {
+          wheelAccumRef.current = 0
+          doAdvanceRef.current()
+          return
+        }
+
+        if (wheelTimeoutRef.current) clearTimeout(wheelTimeoutRef.current)
+        wheelTimeoutRef.current = setTimeout(() => {
+          wheelAccumRef.current = 0
+          setPullDistance(0)
+        }, 400)
+        return
+      }
+
+      // Swipe right (trackpad) → metadata panel via same pull system
+      if (scrollingLeft && !metadataOpenRef.current && Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+        if (wheelDirRef.current !== 'metadata') {
+          wheelAccumRef.current = 0
+          setPullDistance(0)
+        }
+        wheelDirRef.current = 'metadata'
+        setScrollDir('metadata')
+
+        e.preventDefault()
+        wheelAccumRef.current += Math.abs(e.deltaX) * 1.2
+        wheelAccumRef.current = Math.max(0, wheelAccumRef.current)
+        setPullDistance(wheelAccumRef.current)
+
+        if (wheelAccumRef.current >= PULL_THRESHOLD) {
+          wheelAccumRef.current = 0
+          doOpenMetadataRef.current()
+          return
+        }
+
+        if (wheelTimeoutRef.current) clearTimeout(wheelTimeoutRef.current)
+        wheelTimeoutRef.current = setTimeout(() => {
+          wheelAccumRef.current = 0
+          setPullDistance(0)
+        }, 400)
+        return
+      }
     }
 
     el.addEventListener('touchstart', onTouchStart, { passive: true })
@@ -367,10 +525,10 @@ export default function LessonPage() {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         navigate(-1)
-      } else if ((e.key === ' ' || e.key === 'Enter' || e.key === 'ArrowDown') && canAdvanceRef.current) {
+      } else if ((e.key === ' ' || e.key === 'Enter' || e.key === 'ArrowDown' || e.key === 'ArrowRight') && canAdvanceRef.current) {
         e.preventDefault()
         doAdvanceRef.current()
-      } else if (e.key === 'ArrowUp' && canGoBackRef.current) {
+      } else if ((e.key === 'ArrowUp' || e.key === 'ArrowLeft') && canGoBackRef.current) {
         e.preventDefault()
         doGoBackRef.current()
       }
@@ -473,7 +631,7 @@ export default function LessonPage() {
     : ''
 
   return (
-    <div className="fixed inset-0 flex flex-col bg-gradient-to-br from-slate-50 via-white to-slate-50 overflow-hidden" style={{ height: '100dvh' }}>
+    <div className="fixed inset-0 flex flex-col bg-gradient-to-br from-slate-50 via-white to-slate-50 overflow-hidden" style={{ height: '100dvh', overscrollBehavior: 'none' }}>
       {/* ── Header ── */}
       <header className="flex-shrink-0 z-40 bg-white/80 backdrop-blur-xl border-b border-slate-200/50 px-4 py-3">
         <div className="max-w-2xl mx-auto flex items-center gap-4">
@@ -496,8 +654,8 @@ export default function LessonPage() {
       {/* ── Content area ── */}
       <main
         ref={containerRef}
-        className="flex-1 overflow-y-auto relative overscroll-contain"
-        style={{ WebkitOverflowScrolling: 'touch' }}
+        className="flex-1 overflow-y-auto relative"
+        style={{ WebkitOverflowScrolling: 'touch', overscrollBehavior: 'none' }}
       >
         <div
           className={`min-h-full flex flex-col px-6 md:px-8 ${enterClass}`}
@@ -518,22 +676,44 @@ export default function LessonPage() {
           <div className="flex-1 min-h-[24px]" />
         </div>
 
-        {/* Pull-progress gradient overlay */}
-        {pullProgress > 0 && (
-          <div
-            className="absolute inset-x-0 pointer-events-none"
-            style={{
-              ...(scrollDir === 'forward'
-                ? { bottom: 0, height: '160px', background: `linear-gradient(to top, rgba(74, 175, 80, ${pullProgress * 0.12}), transparent)` }
-                : { top: 0, height: '160px', background: `linear-gradient(to bottom, rgba(74, 144, 217, ${pullProgress * 0.12}), transparent)` }
-              ),
-            }}
-          />
-        )}
       </main>
 
+      {/* Pull-progress gradient overlay — fixed to viewport, above footer */}
+      {pullProgress > 0 && (
+        <div
+          className="fixed pointer-events-none z-30"
+          style={{
+            ...(scrollDir === 'forward'
+              ? { left: 0, right: 0, bottom: footerRef.current ? `${footerRef.current.offsetHeight}px` : '72px', height: '160px', background: `linear-gradient(to top, rgba(74, 175, 80, ${pullProgress * 0.12}), transparent)` }
+              : scrollDir === 'metadata'
+              ? { top: 0, bottom: 0, right: 0, width: '160px', background: `linear-gradient(to left, rgba(99, 102, 241, ${pullProgress * 0.15}), transparent)` }
+              : { left: 0, right: 0, top: 0, height: '160px', background: `linear-gradient(to bottom, rgba(74, 144, 217, ${pullProgress * 0.12}), transparent)` }
+            ),
+          }}
+        />
+      )}
+
+      {/* ── Metadata info button ── */}
+      <button
+        onClick={() => setMetadataOpen(true)}
+        className="fixed top-4 right-4 z-30 p-2 bg-white/90 backdrop-blur-md rounded-xl shadow-sm border border-slate-200/50 hover:bg-slate-50 transition-colors"
+        title="View page info"
+      >
+        <Info size={18} className="text-bloom-text-secondary" />
+      </button>
+
+      {/* ── Metadata Panel (swipe right to reveal) ── */}
+      <MetadataPanel
+        workshopLessonId={workshopLessonId}
+        lessonId={lessonId}
+        currentPageIndex={currentIndex}
+        isOpen={metadataOpen}
+        onClose={() => setMetadataOpen(false)}
+        slideProgress={0}
+      />
+
       {/* ── Footer ── */}
-      <footer className="flex-shrink-0 bg-white/80 backdrop-blur-xl border-t border-slate-200/50 px-4 pt-4 pb-5">
+      <footer ref={footerRef} className="flex-shrink-0 bg-white/80 backdrop-blur-xl border-t border-slate-200/50 px-4 pt-4 pb-5">
         <div className="max-w-2xl mx-auto">
           <div className="flex items-center justify-between w-full">
             <span className="text-sm text-bloom-text-secondary font-medium tabular-nums">
@@ -578,12 +758,12 @@ function MorphButton({
   onClickForward,
 }: {
   pullProgress: number
-  scrollDir: 'forward' | 'backward'
+  scrollDir: 'forward' | 'backward' | 'metadata'
   canContinue: boolean
   canGoBack: boolean
   isTransitioning: boolean
   confirmed: boolean
-  confirmedDir: 'forward' | 'backward'
+  confirmedDir: 'forward' | 'backward' | 'metadata'
   isCorrect: boolean | null
   isLast: boolean
   onClickForward: () => void
@@ -592,7 +772,9 @@ function MorphButton({
 
   const isActive = scrollDir === 'forward'
     ? (canContinue && pullProgress > 0)
-    : (canGoBack && pullProgress > 0)
+    : scrollDir === 'backward'
+    ? (canGoBack && pullProgress > 0)
+    : pullProgress > 0 // metadata — always active
 
   const activePull = isActive ? pullProgress : 0
   const t = confirmed ? 1 : activePull
@@ -605,14 +787,17 @@ function MorphButton({
   const pastThreshold = activePull >= 1 || confirmed
 
   const isForward = dir === 'forward'
+  const isMetadata = dir === 'metadata'
   const baseBg = isCorrect ? '#4CAF50' : '#1A1A2E'
-  const confirmedBg = isForward ? '#4CAF50' : '#4A90D9' // green for forward, blue for backward
+  const confirmedBg = isForward ? '#4CAF50' : isMetadata ? '#6366F1' : '#4A90D9' // green / indigo / blue
   const activeBg = pastThreshold ? confirmedBg : baseBg
 
   const disabled = (!canContinue || isTransitioning) && !confirmed
 
-  // Determine the transform-origin so it shrinks from the correct side
-  const transformOrigin = isForward ? 'right center' : 'left center'
+  // For metadata: pin the LEFT edge by shifting the button left as width shrinks.
+  // The button is right-aligned, so normally the right edge stays fixed.
+  // translateX = -(160 - width) shifts it left so the left edge stays put instead.
+  const metadataOffsetX = isMetadata ? -(160 - width) : 0
 
   return (
     <button
@@ -622,14 +807,15 @@ function MorphButton({
         ${disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}
         ${!confirmed && !isTransitioning ? 'active:scale-95' : ''}
         ${pastThreshold && isForward ? 'shadow-lg shadow-emerald-400/50' : ''}
-        ${pastThreshold && !isForward ? 'shadow-lg shadow-blue-400/50' : ''}
+        ${pastThreshold && isMetadata ? 'shadow-lg shadow-indigo-400/50' : ''}
+        ${pastThreshold && !isForward && !isMetadata ? 'shadow-lg shadow-blue-400/50' : ''}
         ${!pastThreshold ? 'shadow-sm' : ''}`}
       style={{
         width: `${width}px`,
         height: '48px',
         borderRadius: `${borderRadius}px`,
         backgroundColor: activeBg,
-        transformOrigin,
+        transform: metadataOffsetX !== 0 ? `translateX(${metadataOffsetX}px)` : undefined,
         transition: confirmed
           ? 'all 0.25s cubic-bezier(0.22, 1, 0.36, 1)'
           : activePull > 0
@@ -658,7 +844,9 @@ function MorphButton({
           transition: confirmed ? 'all 0.25s cubic-bezier(0.22, 1, 0.36, 1)' : undefined,
         }}
       >
-        {pastThreshold ? (
+        {isMetadata ? (
+          pastThreshold ? <Info size={22} strokeWidth={3} /> : <ChevronLeft size={22} />
+        ) : pastThreshold ? (
           isForward ? <Check size={22} strokeWidth={3} /> : <ChevronLeft size={22} strokeWidth={3} />
         ) : (
           isForward ? <ChevronDown size={22} /> : <ChevronUp size={22} />
@@ -689,106 +877,12 @@ function FullPageContent({
 }: FullPageContentProps) {
   const data = content.contentData
 
-  // ── Text ──
-  if (data.type === 'text') {
-    const isBold = data.formatting?.bold
-    const startsWithEmoji = /^[\p{Emoji}]/u.test(data.text)
-
-    if (isBold) {
-      return (
-        <div className="text-center py-6 animate-slide-up">
-          <h2
-            className={`font-bold text-bloom-text leading-tight ${
-              startsWithEmoji ? 'text-3xl md:text-4xl' : 'text-2xl md:text-3xl'
-            }`}
-          >
-            {data.text}
-          </h2>
-          <div className="h-1 w-20 bg-gradient-to-r from-bloom-orange to-bloom-yellow rounded-full mx-auto mt-6" />
-        </div>
-      )
-    }
-
-    // Bullet list
-    if (data.text.includes('\n•')) {
-      const parts = data.text.split('\n')
-      return (
-        <div className="space-y-5 py-4 animate-slide-up">
-          {parts.map((line, i) => {
-            if (line.startsWith('•')) {
-              return (
-                <div key={i} className="flex gap-4 items-start">
-                  <div className="w-2.5 h-2.5 rounded-full bg-gradient-to-br from-bloom-orange to-bloom-yellow mt-3 flex-shrink-0" />
-                  <p className="text-xl leading-relaxed text-bloom-text">{line.substring(2)}</p>
-                </div>
-              )
-            }
-            if (line.trim()) {
-              return (
-                <p key={i} className="text-xl leading-relaxed text-bloom-text">{line}</p>
-              )
-            }
-            return null
-          })}
-        </div>
-      )
-    }
-
-    // Regular paragraph
-    return (
-      <div className="py-4 animate-slide-up">
-        <p className="text-xl md:text-2xl leading-relaxed text-bloom-text text-center">
-          {data.text}
-        </p>
-      </div>
-    )
+  // ── NEW: Rich page with multiple blocks ──
+  if (data.type === 'page') {
+    return <RichContentRenderer blocks={data.blocks} />
   }
 
-  // ── Image ──
-  if (data.type === 'image') {
-    const gradients = [
-      'from-blue-400 to-indigo-500',
-      'from-emerald-400 to-teal-500',
-      'from-orange-400 to-rose-500',
-      'from-violet-400 to-purple-500',
-      'from-cyan-400 to-blue-500',
-    ]
-    const idx = data.url.length % gradients.length
-
-    return (
-      <div className="flex flex-col items-center py-4 animate-slide-up">
-        <div
-          className={`bg-gradient-to-br ${gradients[idx]} rounded-3xl p-10 md:p-14 w-full max-w-sm aspect-square flex items-center justify-center relative overflow-hidden shadow-xl`}
-        >
-          <div className="absolute inset-0 opacity-20">
-            <div className="absolute top-6 right-10 w-24 h-24 rounded-full bg-white/30" />
-            <div className="absolute bottom-8 left-8 w-36 h-36 rounded-full bg-white/20" />
-          </div>
-          <div className="text-center relative z-10">
-            <div className="w-20 h-20 rounded-2xl bg-white/30 flex items-center justify-center mx-auto mb-4 backdrop-blur-sm">
-              <span className="text-4xl">
-                {data.url.includes('wave') ? '〰️' :
-                 data.url.includes('keyboard') ? '🎹' :
-                 data.url.includes('chord') ? '🎵' :
-                 data.url.includes('bit') ? '💻' :
-                 data.url.includes('qubit') ? '⚛️' :
-                 data.url.includes('entangle') ? '🔗' :
-                 data.url.includes('sphere') ? '🌐' : '📊'}
-              </span>
-            </div>
-            <span className="text-white/90 text-base font-medium">Illustration</span>
-          </div>
-        </div>
-        {data.caption && (
-          <p className="text-base text-bloom-text-secondary italic text-center mt-5 px-4 max-w-md">
-            {data.caption}
-          </p>
-        )}
-      </div>
-    )
-  }
-
-  // ── Question ──
+  // ── Question (enhanced with optional rich text) ──
   if (data.type === 'question') {
     return (
       <div className="space-y-5 py-2 animate-slide-up">
@@ -798,7 +892,11 @@ function FullPageContent({
               <span className="text-bloom-orange font-bold text-lg">?</span>
             </div>
             <h2 className="text-xl md:text-2xl font-semibold text-white leading-snug">
-              {data.question}
+              {data.questionSegments ? (
+                <RichText segments={data.questionSegments} />
+              ) : (
+                data.question
+              )}
             </h2>
           </div>
         </div>
@@ -855,7 +953,13 @@ function FullPageContent({
                   >
                     {String.fromCharCode(65 + index)}
                   </div>
-                  <span className={`flex-1 font-medium ${textColor}`}>{option}</span>
+                  <span className={`flex-1 font-medium ${textColor}`}>
+                    {data.optionSegments?.[index] ? (
+                      <RichText segments={data.optionSegments[index]} />
+                    ) : (
+                      option
+                    )}
+                  </span>
                   {iconElement}
                 </div>
               </button>
@@ -871,7 +975,7 @@ function FullPageContent({
         )}
 
         {/* Correct answer explanation */}
-        {showExplanation && data.explanation && (
+        {showExplanation && (data.explanation || data.explanationSegments) && (
           <div className="p-5 rounded-2xl bg-gradient-to-br from-amber-50 to-yellow-50 border border-amber-200 animate-slide-up">
             <div className="flex items-center gap-3 mb-3">
               <div className="w-10 h-10 rounded-xl bg-amber-400 flex items-center justify-center">
@@ -879,8 +983,113 @@ function FullPageContent({
               </div>
               <span className="font-bold text-amber-900 text-lg">Great insight!</span>
             </div>
-            <p className="text-amber-800 leading-relaxed">{data.explanation}</p>
+            <p className="text-amber-800 leading-relaxed">
+              {data.explanationSegments ? (
+                <RichText segments={data.explanationSegments} />
+              ) : (
+                data.explanation
+              )}
+            </p>
           </div>
+        )}
+      </div>
+    )
+  }
+
+  // ── LEGACY: Text ──
+  if (data.type === 'text') {
+    const isBold = data.formatting?.bold
+    const startsWithEmoji = /^[\p{Emoji}]/u.test(data.text)
+
+    if (isBold) {
+      return (
+        <div className="text-center py-6 animate-slide-up">
+          <h2
+            className={`font-bold text-bloom-text leading-tight ${
+              startsWithEmoji ? 'text-3xl md:text-4xl' : 'text-2xl md:text-3xl'
+            }`}
+          >
+            {data.text}
+          </h2>
+          <div className="h-1 w-20 bg-gradient-to-r from-bloom-orange to-bloom-yellow rounded-full mx-auto mt-6" />
+        </div>
+      )
+    }
+
+    // Bullet list
+    if (data.text.includes('\n•')) {
+      const parts = data.text.split('\n')
+      return (
+        <div className="space-y-5 py-4 animate-slide-up">
+          {parts.map((line, i) => {
+            if (line.startsWith('•')) {
+              return (
+                <div key={i} className="flex gap-4 items-start">
+                  <div className="w-2.5 h-2.5 rounded-full bg-gradient-to-br from-bloom-orange to-bloom-yellow mt-3 flex-shrink-0" />
+                  <p className="text-xl leading-relaxed text-bloom-text">{line.substring(2)}</p>
+                </div>
+              )
+            }
+            if (line.trim()) {
+              return (
+                <p key={i} className="text-xl leading-relaxed text-bloom-text">{line}</p>
+              )
+            }
+            return null
+          })}
+        </div>
+      )
+    }
+
+    // Regular paragraph
+    return (
+      <div className="py-4 animate-slide-up">
+        <p className="text-xl md:text-2xl leading-relaxed text-bloom-text text-center">
+          {data.text}
+        </p>
+      </div>
+    )
+  }
+
+  // ── LEGACY: Image ──
+  if (data.type === 'image') {
+    const gradients = [
+      'from-blue-400 to-indigo-500',
+      'from-emerald-400 to-teal-500',
+      'from-orange-400 to-rose-500',
+      'from-violet-400 to-purple-500',
+      'from-cyan-400 to-blue-500',
+    ]
+    const idx = data.url.length % gradients.length
+
+    return (
+      <div className="flex flex-col items-center py-4 animate-slide-up">
+        <div
+          className={`bg-gradient-to-br ${gradients[idx]} rounded-3xl p-10 md:p-14 w-full max-w-sm aspect-square flex items-center justify-center relative overflow-hidden shadow-xl`}
+        >
+          <div className="absolute inset-0 opacity-20">
+            <div className="absolute top-6 right-10 w-24 h-24 rounded-full bg-white/30" />
+            <div className="absolute bottom-8 left-8 w-36 h-36 rounded-full bg-white/20" />
+          </div>
+          <div className="text-center relative z-10">
+            <div className="w-20 h-20 rounded-2xl bg-white/30 flex items-center justify-center mx-auto mb-4 backdrop-blur-sm">
+              <span className="text-4xl">
+                {data.url.includes('wave') ? '〰️' :
+                 data.url.includes('keyboard') ? '🎹' :
+                 data.url.includes('chord') ? '🎵' :
+                 data.url.includes('bit') ? '💻' :
+                 data.url.includes('qubit') ? '⚛️' :
+                 data.url.includes('entangle') ? '🔗' :
+                 data.url.includes('sphere') ? '🌐' : '📊'}
+              </span>
+            </div>
+            <span className="text-white/90 text-base font-medium">Illustration</span>
+          </div>
+        </div>
+        {data.caption && (
+          <p className="text-base text-bloom-text-secondary italic text-center mt-5 px-4 max-w-md">
+            {data.caption}
+          </p>
         )}
       </div>
     )

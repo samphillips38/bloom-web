@@ -11,11 +11,13 @@
 @layer components {
   .btn-primary {
     @apply w-full py-4 px-6 rounded-2xl font-semibold text-white transition-all duration-200 
+           flex items-center justify-center gap-2
            hover:opacity-90 hover:shadow-lg active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed;
   }
   
   .btn-secondary {
     @apply w-full py-4 px-6 rounded-2xl font-semibold border-2 transition-all duration-200 
+           flex items-center justify-center gap-2
            hover:bg-opacity-5 active:scale-[0.98];
   }
   
@@ -204,4 +206,96 @@
 
 .animate-hint-bounce {
   animation: hint-bounce 2s ease-in-out infinite;
+}
+
+/* ── Interactive slider styling ── */
+.interactive-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(
+    to right,
+    var(--slider-color, #FF6B35) 0%,
+    var(--slider-color, #FF6B35) var(--slider-pct, 50%),
+    #e2e8f0 var(--slider-pct, 50%),
+    #e2e8f0 100%
+  );
+  outline: none;
+  cursor: pointer;
+}
+
+.interactive-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: white;
+  border: 3px solid var(--slider-color, #FF6B35);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.interactive-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.2);
+}
+
+.interactive-slider::-webkit-slider-thumb:active {
+  transform: scale(1.05);
+}
+
+.interactive-slider::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: white;
+  border: 3px solid var(--slider-color, #FF6B35);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  cursor: pointer;
+}
+
+/* ── Rich content KaTeX overrides ── */
+.rich-content .katex {
+  font-size: 1.15em;
+}
+
+.block-latex .katex {
+  font-size: 1.4em;
+}
+
+.inline-latex {
+  display: inline;
+  vertical-align: baseline;
+}
+
+.inline-latex .katex {
+  font-size: 1.05em;
+}
+
+/* ── Definition popover ── */
+.definition-popover {
+  filter: drop-shadow(0 4px 20px rgba(0, 0, 0, 0.12));
+}
+
+/* ── Animation pulse rings ── */
+@keyframes pulse-ring {
+  0% {
+    transform: translate(-50%, -50%) scale(0.8);
+    opacity: 0.6;
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(1.8);
+    opacity: 0;
+  }
+}
+
+.animation-pulse-ring {
+  animation: pulse-ring 2s ease-out infinite;
+}
+
+.animation-pulse-ring-delay {
+  animation: pulse-ring 2s ease-out 0.5s infinite;
 }

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Brain, Palette, Calculator, Atom, Code, ChevronRight, Music, Zap } from 'lucide-react'
 import { api, Category, Course } from '../lib/api'
 import Card from '../components/Card'
+import { AIBadge, CreatorTag } from './WorkshopPage'
 
 const categoryIcons: Record<string, React.ElementType> = {
   logic: Brain,
@@ -145,6 +146,10 @@ export default function CoursesPage() {
                       {course.description}
                     </p>
                   )}
+                  <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                    {course.creatorName && <CreatorTag name={course.creatorName} size="sm" />}
+                    {course.aiInvolvement && <AIBadge involvement={course.aiInvolvement} size="sm" />}
+                  </div>
                 </div>
                 
                 <ChevronRight size={20} className="text-bloom-text-muted flex-shrink-0" />

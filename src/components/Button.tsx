@@ -42,10 +42,10 @@ export default function Button({
       {...props}
     >
       {isLoading ? (
-        <span className="flex items-center justify-center gap-2">
+        <>
           <Loader2 size={20} className="animate-spin" />
           <span>Loading...</span>
-        </span>
+        </>
       ) : (
         children
       )}
