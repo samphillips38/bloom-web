@@ -124,6 +124,10 @@ export interface WorkshopLesson {
   status: 'draft' | 'published'
   editPolicy: 'open' | 'approval'
   aiInvolvement: 'none' | 'collaboration' | 'full'
+  tags: string[]
+  ratingSum: number
+  ratingCount: number
+  viewCount: number
   isPromoted: boolean
   publishedAt?: string
   createdAt: string
@@ -133,6 +137,22 @@ export interface WorkshopLesson {
 export interface WorkshopLessonSummary extends WorkshopLesson {
   authorName: string
   pageCount: number
+  averageRating: number
+}
+
+export interface TagInfo {
+  tag: string
+  count: number
+}
+
+export interface WorkshopLessonPlayData extends LessonWithContent {
+  authorName: string
+  authorAvatarUrl?: string
+  description?: string
+  themeColor?: string
+  aiInvolvement: string
+  tags: string[]
+  creatorName: string
 }
 
 export interface WorkshopLessonContent {
@@ -289,6 +309,7 @@ class ApiClient {
     visibility?: string
     editPolicy?: string
     aiInvolvement?: string
+    tags?: string[]
   }) {
     return this.request<{ lesson: WorkshopLesson }>('/workshop/lessons', {
       method: 'POST',
@@ -308,6 +329,7 @@ class ApiClient {
     visibility: string
     editPolicy: string
     aiInvolvement: string
+    tags: string[]
   }>) {
     return this.request<{ lesson: WorkshopLesson }>(`/workshop/lessons/${id}`, {
       method: 'PUT',
@@ -397,19 +419,42 @@ class ApiClient {
   }
 
   async generateAIDraft(topic: string, pageCount?: number) {
-    return this.request<{ pages: ContentData[] }>('/workshop/ai-draft', {
+    return this.request<{ pages: ContentData[]; tags: string[] }>('/workshop/ai-draft', {
       method: 'POST',
       body: JSON.stringify({ topic, pageCount }),
     })
   }
 
-  async browseWorkshopLessons(opts?: { search?: string; limit?: number; offset?: number }) {
+  async browseWorkshopLessons(opts?: { search?: string; tag?: string; limit?: number; offset?: number; sort?: 'recent' | 'rating' | 'popular' }) {
     const params = new URLSearchParams()
     if (opts?.search) params.set('search', opts.search)
+    if (opts?.tag) params.set('tag', opts.tag)
     if (opts?.limit) params.set('limit', String(opts.limit))
     if (opts?.offset) params.set('offset', String(opts.offset))
+    if (opts?.sort) params.set('sort', opts.sort)
     const query = params.toString() ? `?${params.toString()}` : ''
     return this.request<{ lessons: WorkshopLessonSummary[]; total: number }>(`/workshop/browse${query}`)
+  }
+
+  async getPopularTags(limit?: number) {
+    const query = limit ? `?limit=${limit}` : ''
+    return this.request<{ tags: TagInfo[] }>(`/workshop/tags/popular${query}`)
+  }
+
+  async getLessonsByTag(tag: string, limit?: number) {
+    const query = limit ? `?limit=${limit}` : ''
+    return this.request<{ lessons: WorkshopLessonSummary[] }>(`/workshop/tags/${encodeURIComponent(tag)}/lessons${query}`)
+  }
+
+  async playWorkshopLesson(id: string) {
+    return this.request<{ lesson: WorkshopLessonPlayData }>(`/workshop/lessons/${id}/play`)
+  }
+
+  async rateWorkshopLesson(id: string, rating: number) {
+    return this.request<{ averageRating: number; ratingCount: number }>(`/workshop/lessons/${id}/rate`, {
+      method: 'POST',
+      body: JSON.stringify({ rating }),
+    })
   }
 }
 

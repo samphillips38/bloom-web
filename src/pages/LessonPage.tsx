@@ -10,9 +10,10 @@ import MetadataPanel from '../components/workshop/MetadataPanel'
 const PULL_THRESHOLD = 120
 
 export default function LessonPage() {
-  const { lessonId } = useParams()
+  const { lessonId, workshopId } = useParams()
   const navigate = useNavigate()
   const { stats, refreshStats } = useAuth()
+  const isCommunity = !!workshopId
 
   const [lesson, setLesson] = useState<LessonWithContent | null>(null)
   const [currentIndex, setCurrentIndex] = useState(0)
@@ -59,14 +60,32 @@ export default function LessonPage() {
 
   // ── Load lesson ──
   useEffect(() => {
-    if (lessonId) {
-      setIsLoading(true)
-      api.getLesson(lessonId)
-        .then(({ lesson }) => setLesson(lesson))
-        .catch(err => console.error('Failed to load lesson:', err))
-        .finally(() => setIsLoading(false))
-    }
-  }, [lessonId])
+    const id = workshopId || lessonId
+    if (!id) return
+    setIsLoading(true)
+
+    const load = workshopId
+      ? api.playWorkshopLesson(workshopId).then(r => {
+          setWorkshopLessonId(workshopId)
+          return r
+        })
+      : api.getLesson(id)
+
+    load
+      .then(({ lesson }) => {
+        setLesson(lesson)
+        // Handle ?start=N for community courses
+        const startParam = searchParams.get('start')
+        if (startParam) {
+          const startIdx = parseInt(startParam)
+          if (!isNaN(startIdx) && startIdx > 0 && startIdx < lesson.content.length) {
+            setCurrentIndex(startIdx)
+          }
+        }
+      })
+      .catch(err => console.error('Failed to load lesson:', err))
+      .finally(() => setIsLoading(false))
+  }, [lessonId, workshopId])
 
   // Lock body scroll while lesson is open & initial enter animation
   useEffect(() => {
@@ -124,13 +143,31 @@ export default function LessonPage() {
     if (isLast) {
       setShowCelebration(true)
       try {
-        await api.updateProgress(lessonId!, true, 100)
-        await refreshStats()
+        if (isCommunity && workshopId) {
+          // Save all pages as completed in localStorage
+          const allPages = Array.from({ length: lesson!.content.length }, (_, i) => i)
+          localStorage.setItem(`bloom-community-progress-${workshopId}`, JSON.stringify(allPages))
+        } else {
+          await api.updateProgress(lessonId!, true, 100)
+          await refreshStats()
+        }
       } catch (err) {
         console.error('Failed to save progress:', err)
       }
       setTimeout(() => navigate(-1), 1800)
       return
+    }
+
+    // Save page-level progress for community courses
+    if (isCommunity && workshopId) {
+      try {
+        const stored = localStorage.getItem(`bloom-community-progress-${workshopId}`)
+        const completed: number[] = stored ? JSON.parse(stored) : []
+        if (!completed.includes(currentIndex)) {
+          completed.push(currentIndex)
+          localStorage.setItem(`bloom-community-progress-${workshopId}`, JSON.stringify(completed))
+        }
+      } catch { /* ignore */ }
     }
 
     setCurrentIndex(prev => prev + 1)
@@ -147,7 +184,7 @@ export default function LessonPage() {
     setScrollDir('forward')
     isTransitioningRef.current = false
     setIsTransitioning(false)
-  }, [isLast, lessonId, navigate, refreshStats])
+  }, [isLast, lessonId, workshopId, isCommunity, navigate, refreshStats, currentIndex, lesson])
 
   // ── Go back to previous page ──
   const doGoBack = useCallback(async () => {

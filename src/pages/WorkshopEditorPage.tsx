@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import {
   api, WorkshopLessonWithContent, ContentData,
-  ContentBlock, TextSegment, SourceReference,
+  ContentBlock, TextSegment, SourceReference, TagInfo,
 } from '../lib/api'
 import Card from '../components/Card'
 import Button from '../components/Button'
@@ -29,6 +29,9 @@ export default function WorkshopEditorPage() {
   const [themeColor, setThemeColor] = useState('#FF6B35')
   const [visibility, setVisibility] = useState<'private' | 'public'>('private')
   const [editPolicy, setEditPolicy] = useState<'open' | 'approval'>('approval')
+  const [tags, setTags] = useState<string[]>([])
+  const [tagInput, setTagInput] = useState('')
+  const [popularTags, setPopularTags] = useState<TagInfo[]>([])
   const [pages, setPages] = useState<PageDraft[]>([])
   const [isLoading, setIsLoading] = useState(!isNew)
   const [isSaving, setIsSaving] = useState(false)
@@ -45,6 +48,8 @@ export default function WorkshopEditorPage() {
     if (lessonId) {
       loadLesson(lessonId)
     }
+    // Load popular tags for suggestions
+    api.getPopularTags(30).then(res => setPopularTags(res.tags)).catch(() => {})
   }, [lessonId])
 
   async function loadLesson(id: string) {
@@ -57,6 +62,7 @@ export default function WorkshopEditorPage() {
       setThemeColor(lesson.themeColor || '#FF6B35')
       setVisibility(lesson.visibility as 'private' | 'public')
       setEditPolicy(lesson.editPolicy as 'open' | 'approval')
+      setTags(lesson.tags || [])
       setPages(lesson.content.map(c => ({
         id: c.id,
         contentType: c.contentType,
@@ -86,6 +92,7 @@ export default function WorkshopEditorPage() {
           themeColor,
           visibility,
           editPolicy,
+          tags,
         })
         currentId = lesson.id
         setSavedLessonId(lesson.id)
@@ -97,6 +104,7 @@ export default function WorkshopEditorPage() {
           themeColor,
           visibility,
           editPolicy,
+          tags,
         })
       }
 
@@ -210,7 +218,7 @@ export default function WorkshopEditorPage() {
   }
 
   // AI Draft callback
-  function handleAIDraftGenerated(generatedPages: ContentData[]) {
+  function handleAIDraftGenerated(generatedPages: ContentData[], generatedTags?: string[]) {
     const newPages: PageDraft[] = generatedPages.map(cd => ({
       id: null,
       contentType: cd.type === 'question' ? 'question' : 'page',
@@ -219,6 +227,13 @@ export default function WorkshopEditorPage() {
       saved: false,
     }))
     setPages(prev => [...prev, ...newPages])
+    // Merge AI-generated tags with existing tags
+    if (generatedTags && generatedTags.length > 0) {
+      setTags(prev => {
+        const merged = new Set([...prev, ...generatedTags])
+        return Array.from(merged)
+      })
+    }
     setShowAIDraft(false)
   }
 
@@ -291,6 +306,19 @@ export default function WorkshopEditorPage() {
           placeholder="Add a description..."
           className="w-full text-bloom-text-secondary bg-transparent outline-none placeholder:text-slate-300"
         />
+        {/* Tags inline display */}
+        {tags.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {tags.map(tag => (
+              <span
+                key={tag}
+                className="px-2 py-0.5 rounded-full bg-bloom-orange/10 text-bloom-orange text-xs font-medium"
+              >
+                {tag}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Settings Panel */}
@@ -362,6 +390,80 @@ export default function WorkshopEditorPage() {
                 <ShieldOff size={14} /> Open
               </button>
             </div>
+          </div>
+
+          {/* Tags */}
+          <div>
+            <span className="text-sm text-bloom-text-secondary block mb-2">Tags</span>
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {tags.map(tag => (
+                <span
+                  key={tag}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-bloom-orange/10 text-bloom-orange text-xs font-medium"
+                >
+                  {tag}
+                  <button
+                    onClick={() => setTags(prev => prev.filter(t => t !== tag))}
+                    className="hover:bg-bloom-orange/20 rounded-full p-0.5 transition-colors"
+                  >
+                    <X size={10} />
+                  </button>
+                </span>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={tagInput}
+                onChange={(e) => setTagInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && tagInput.trim()) {
+                    e.preventDefault()
+                    const newTag = tagInput.trim().toLowerCase()
+                    if (!tags.includes(newTag)) {
+                      setTags(prev => [...prev, newTag])
+                    }
+                    setTagInput('')
+                  }
+                }}
+                placeholder="Add a tag..."
+                className="flex-1 text-sm border rounded-lg px-3 py-1.5 outline-none focus:ring-2 focus:ring-bloom-orange/30"
+              />
+              <button
+                onClick={() => {
+                  if (tagInput.trim()) {
+                    const newTag = tagInput.trim().toLowerCase()
+                    if (!tags.includes(newTag)) {
+                      setTags(prev => [...prev, newTag])
+                    }
+                    setTagInput('')
+                  }
+                }}
+                className="px-3 py-1.5 rounded-lg bg-bloom-orange text-white text-sm font-medium hover:opacity-90 transition-opacity"
+              >
+                Add
+              </button>
+            </div>
+            {/* Popular tag suggestions */}
+            {popularTags.length > 0 && (
+              <div className="mt-2">
+                <span className="text-xs text-bloom-text-muted block mb-1">Popular tags:</span>
+                <div className="flex flex-wrap gap-1">
+                  {popularTags
+                    .filter(pt => !tags.includes(pt.tag))
+                    .slice(0, 10)
+                    .map(pt => (
+                      <button
+                        key={pt.tag}
+                        onClick={() => setTags(prev => [...prev, pt.tag])}
+                        className="px-2 py-0.5 rounded-full bg-slate-100 hover:bg-slate-200 text-xs text-bloom-text-secondary transition-colors"
+                      >
+                        {pt.tag}
+                      </button>
+                    ))}
+                </div>
+              </div>
+            )}
           </div>
         </Card>
       )}
@@ -440,7 +542,7 @@ export default function WorkshopEditorPage() {
       {/* AI Draft Dialog */}
       {showAIDraft && (
         <AIDraftDialog
-          onGenerated={handleAIDraftGenerated}
+          onGenerated={(pages, generatedTags) => handleAIDraftGenerated(pages, generatedTags)}
           onClose={() => setShowAIDraft(false)}
         />
       )}
@@ -1158,7 +1260,7 @@ function AIDraftDialog({
   onGenerated,
   onClose,
 }: {
-  onGenerated: (pages: ContentData[]) => void
+  onGenerated: (pages: ContentData[], tags?: string[]) => void
   onClose: () => void
 }) {
   const [topic, setTopic] = useState('')
@@ -1172,8 +1274,8 @@ function AIDraftDialog({
     setError(null)
 
     try {
-      const { pages } = await api.generateAIDraft(topic.trim(), pageCount)
-      onGenerated(pages)
+      const { pages, tags } = await api.generateAIDraft(topic.trim(), pageCount)
+      onGenerated(pages, tags)
     } catch (err: any) {
       setError(err.message || 'Failed to generate lesson')
     } finally {
