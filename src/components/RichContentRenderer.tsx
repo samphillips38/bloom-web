@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect, useMemo } from 'react'
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import { Info, Lightbulb, AlertTriangle, BookOpen, X } from 'lucide-react'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
@@ -62,18 +63,50 @@ function DefinitionTerm({
   definition: string
 }) {
   const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLSpanElement>(null)
+  const termRef = useRef<HTMLSpanElement>(null)
   const popRef = useRef<HTMLDivElement>(null)
-  const [nudge, setNudge] = useState(0) // horizontal px offset to keep popover on screen
-  const [flipped, setFlipped] = useState(false) // true = show below the term instead of above
+  const [pos, setPos] = useState<{ top: number; left: number; arrowLeft: number; flipped: boolean }>({
+    top: 0, left: 0, arrowLeft: 0, flipped: false,
+  })
+
+  // Compute popup position from the term's bounding rect
+  const reposition = useCallback(() => {
+    if (!termRef.current || !popRef.current) return
+
+    const termRect = termRef.current.getBoundingClientRect()
+    const popRect = popRef.current.getBoundingClientRect()
+    const pad = 8
+
+    // Account for sticky/fixed headers
+    const header = document.querySelector('header')
+    const topBound = header ? header.getBoundingClientRect().bottom + 4 : pad
+
+    // Prefer above; flip below if not enough room
+    const spaceAbove = termRect.top - topBound
+    const flipped = spaceAbove < popRect.height + 8
+
+    // Vertical position
+    const top = flipped
+      ? termRect.bottom + 8   // below the term
+      : termRect.top - popRect.height - 8 // above the term
+
+    // Horizontal: center on the term, then clamp to viewport
+    let left = termRect.left + termRect.width / 2 - popRect.width / 2
+    left = Math.max(pad, Math.min(left, window.innerWidth - popRect.width - pad))
+
+    // Arrow should point at the center of the term
+    const arrowLeft = termRect.left + termRect.width / 2 - left
+
+    setPos({ top, left, arrowLeft, flipped })
+  }, [])
 
   // Close on click outside
   useEffect(() => {
     if (!open) return
     const handler = (e: MouseEvent) => {
       if (
-        ref.current &&
-        !ref.current.contains(e.target as Node) &&
+        termRef.current &&
+        !termRef.current.contains(e.target as Node) &&
         popRef.current &&
         !popRef.current.contains(e.target as Node)
       ) {
@@ -84,56 +117,45 @@ function DefinitionTerm({
     return () => document.removeEventListener('mousedown', handler)
   }, [open])
 
-  // Adjust popover position to stay within viewport
+  // Position on open + reposition on scroll/resize
   useEffect(() => {
-    if (!open || !popRef.current || !ref.current) return
+    if (!open) return
+    // Small delay so the popup has rendered and we can measure it
+    const frame = requestAnimationFrame(reposition)
 
-    const popRect = popRef.current.getBoundingClientRect()
-    const termRect = ref.current.getBoundingClientRect()
-    const pad = 8
-
-    // Check vertical: if popup goes above viewport, flip to below
-    if (!flipped && popRect.top < pad) {
-      setFlipped(true)
-      return // re-render will re-run this effect with new position
-    }
-    // If flipped but now it would fit above (e.g. user scrolled), unflip
-    if (flipped) {
-      // Estimate where it would be if above: termRect.top - popRect.height - 8 (margin)
-      const wouldBeTop = termRect.top - popRect.height - 8
-      if (wouldBeTop >= pad) {
-        setFlipped(false)
-        return
-      }
+    // Reposition if the page scrolls or resizes
+    const scrollParents: EventTarget[] = [window]
+    let el: HTMLElement | null = termRef.current
+    while (el) {
+      if (el.scrollHeight > el.clientHeight) scrollParents.push(el)
+      el = el.parentElement
     }
 
-    // Check horizontal
-    let offset = 0
-    if (popRect.left < pad) {
-      offset = pad - popRect.left
-    } else if (popRect.right > window.innerWidth - pad) {
-      offset = (window.innerWidth - pad) - popRect.right
+    scrollParents.forEach(sp => sp.addEventListener('scroll', reposition, { passive: true }))
+    window.addEventListener('resize', reposition, { passive: true })
+
+    return () => {
+      cancelAnimationFrame(frame)
+      scrollParents.forEach(sp => sp.removeEventListener('scroll', reposition))
+      window.removeEventListener('resize', reposition)
     }
-    if (offset !== nudge) setNudge(offset)
-  }, [open, flipped]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, reposition])
 
   return (
-    <span className="relative inline">
+    <span className="inline">
       <span
-        ref={ref}
-        onClick={() => { setNudge(0); setFlipped(false); setOpen(!open) }}
+        ref={termRef}
+        onClick={() => setOpen(!open)}
         className="definition-term cursor-pointer border-b-2 border-dashed border-bloom-orange/50 text-bloom-orange hover:border-bloom-orange hover:text-bloom-orange/80 transition-colors duration-200"
       >
         {children}
       </span>
 
-      {open && (
+      {open && createPortal(
         <div
           ref={popRef}
-          className={`definition-popover absolute z-50 left-1/2 w-72 max-w-[90vw] ${
-            flipped ? 'top-full mt-2' : 'bottom-full mb-2'
-          }`}
-          style={{ transform: `translateX(calc(-50% + ${nudge}px))` }}
+          className="definition-popover fixed w-72 max-w-[90vw]"
+          style={{ zIndex: 9999, top: pos.top, left: pos.left }}
         >
           <div className="bg-white rounded-xl shadow-xl border border-slate-200 p-4 animate-pop-in">
             <div className="flex items-start justify-between gap-2 mb-1">
@@ -147,19 +169,20 @@ function DefinitionTerm({
             </div>
             <p className="text-sm text-bloom-text leading-relaxed">{definition}</p>
             {/* Arrow pointing toward the term */}
-            {flipped ? (
+            {pos.flipped ? (
               <div
                 className="absolute bottom-full w-0 h-0 border-l-8 border-r-8 border-b-8 border-l-transparent border-r-transparent border-b-white"
-                style={{ left: `calc(50% - ${nudge}px)`, transform: 'translateX(-50%)' }}
+                style={{ left: pos.arrowLeft, transform: 'translateX(-50%)' }}
               />
             ) : (
               <div
                 className="absolute top-full w-0 h-0 border-l-8 border-r-8 border-t-8 border-l-transparent border-r-transparent border-t-white"
-                style={{ left: `calc(50% - ${nudge}px)`, transform: 'translateX(-50%)' }}
+                style={{ left: pos.arrowLeft, transform: 'translateX(-50%)' }}
               />
             )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </span>
   )
