@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
-import { X, Zap, Check, Lightbulb, ChevronRight, ChevronDown, ChevronUp, ChevronLeft, Sparkles, Info } from 'lucide-react'
-import { api, LessonWithContent, LessonContent, ContentData } from '../lib/api'
+import { X, Zap, Check, Lightbulb, ChevronRight, ChevronDown, ChevronUp, ChevronLeft, Sparkles, Info, BookOpen } from 'lucide-react'
+import { api, LessonWithContent, LessonContent, LessonModule, ContentData } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import ProgressBar from '../components/ProgressBar'
 import RichContentRenderer, { RichText } from '../components/RichContentRenderer'
@@ -10,10 +10,9 @@ import MetadataPanel from '../components/workshop/MetadataPanel'
 const PULL_THRESHOLD = 120
 
 export default function LessonPage() {
-  const { lessonId, workshopId } = useParams()
+  const { lessonId } = useParams()
   const navigate = useNavigate()
   const { stats, refreshStats } = useAuth()
-  const isCommunity = !!workshopId
 
   const [lesson, setLesson] = useState<LessonWithContent | null>(null)
   const [currentIndex, setCurrentIndex] = useState(0)
@@ -22,6 +21,8 @@ export default function LessonPage() {
   const [showExplanation, setShowExplanation] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [showCelebration, setShowCelebration] = useState(false)
+  const [showModuleComplete, setShowModuleComplete] = useState(false)
+  const [completedModuleIndex, setCompletedModuleIndex] = useState(-1)
 
   // Pull-to-advance/go-back state
   const [pullDistance, setPullDistance] = useState(0)           // always >= 0
@@ -33,14 +34,7 @@ export default function LessonPage() {
 
   // Metadata panel state (swipe-right to reveal)
   const [metadataOpen, setMetadataOpen] = useState(false)
-  const [workshopLessonId, setWorkshopLessonId] = useState<string | null>(null)
   const [searchParams] = useSearchParams()
-
-  // Check if this lesson is from a workshop (workshop lessons pass ?workshop=id)
-  useEffect(() => {
-    const wId = searchParams.get('workshop')
-    if (wId) setWorkshopLessonId(wId)
-  }, [searchParams])
 
   // Refs for gesture handling (avoid stale closures)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -60,32 +54,25 @@ export default function LessonPage() {
 
   // ── Load lesson ──
   useEffect(() => {
-    const id = workshopId || lessonId
-    if (!id) return
+    if (!lessonId) return
     setIsLoading(true)
 
-    const load = workshopId
-      ? api.playWorkshopLesson(workshopId).then(r => {
-          setWorkshopLessonId(workshopId)
-          return r
-        })
-      : api.getLesson(id)
-
-    load
+    api.getLesson(lessonId)
       .then(({ lesson }) => {
         setLesson(lesson)
-        // Handle ?start=N for community courses
+        // Handle ?start=N query param
         const startParam = searchParams.get('start')
         if (startParam) {
           const startIdx = parseInt(startParam)
-          if (!isNaN(startIdx) && startIdx > 0 && startIdx < lesson.content.length) {
+          const totalPages = (lesson.modules || []).reduce((sum, m) => sum + (m.content || []).length, 0) || lesson.content.length
+          if (!isNaN(startIdx) && startIdx > 0 && startIdx < totalPages) {
             setCurrentIndex(startIdx)
           }
         }
       })
       .catch(err => console.error('Failed to load lesson:', err))
       .finally(() => setIsLoading(false))
-  }, [lessonId, workshopId])
+  }, [lessonId])
 
   // Lock body scroll while lesson is open & initial enter animation
   useEffect(() => {
@@ -110,14 +97,54 @@ export default function LessonPage() {
     }
   }, [])
 
+  // ── Flatten modules into a single page list with module boundary tracking ──
+  const { flatPages, moduleBoundaries, modules } = useMemo(() => {
+    if (!lesson) return { flatPages: [] as LessonContent[], moduleBoundaries: [] as number[], modules: [] as LessonModule[] }
+
+    const mods = lesson.modules || []
+    if (mods.length === 0) {
+      // No modules — fall back to flat content
+      return { flatPages: lesson.content || [], moduleBoundaries: [] as number[], modules: [] as LessonModule[] }
+    }
+
+    const flat: LessonContent[] = []
+    const boundaries: number[] = [] // indices where each module ends (last page index of each module)
+
+    for (const mod of mods) {
+      const modContent = mod.content || []
+      for (const page of modContent) {
+        flat.push(page)
+      }
+      if (modContent.length > 0) {
+        boundaries.push(flat.length - 1) // last page index of this module
+      }
+    }
+
+    return { flatPages: flat, moduleBoundaries: boundaries, modules: mods }
+  }, [lesson])
+
   // ── Derived state ──
-  const currentContent = lesson?.content[currentIndex]
-  const progress = lesson ? (currentIndex + 1) / lesson.content.length : 0
-  const isLast = lesson ? currentIndex >= lesson.content.length - 1 : false
+  const currentContent = flatPages[currentIndex]
+  const progress = flatPages.length > 0 ? (currentIndex + 1) / flatPages.length : 0
+  const isLast = flatPages.length > 0 ? currentIndex >= flatPages.length - 1 : false
   const isFirst = currentIndex === 0
   const isQuestion = currentContent?.contentData.type === 'question'
   const canContinue = !isQuestion || isCorrect === true
   const pullProgress = Math.min(pullDistance / PULL_THRESHOLD, 1)
+
+  // Module tracking
+  const currentModuleIndex = useMemo(() => {
+    if (modules.length === 0) return -1
+    let pageCount = 0
+    for (let i = 0; i < modules.length; i++) {
+      pageCount += (modules[i].content || []).length
+      if (currentIndex < pageCount) return i
+    }
+    return modules.length - 1
+  }, [modules, currentIndex])
+
+  const currentModule = currentModuleIndex >= 0 ? modules[currentModuleIndex] : null
+  const isModuleBoundary = moduleBoundaries.includes(currentIndex) && !isLast
 
   // Keep refs in sync for event handlers
   canAdvanceRef.current = canContinue && !isTransitioningRef.current
@@ -143,14 +170,8 @@ export default function LessonPage() {
     if (isLast) {
       setShowCelebration(true)
       try {
-        if (isCommunity && workshopId) {
-          // Save all pages as completed in localStorage
-          const allPages = Array.from({ length: lesson!.content.length }, (_, i) => i)
-          localStorage.setItem(`bloom-community-progress-${workshopId}`, JSON.stringify(allPages))
-        } else {
-          await api.updateProgress(lessonId!, true, 100)
-          await refreshStats()
-        }
+        await api.updateProgress(lessonId!, true, 100)
+        await refreshStats()
       } catch (err) {
         console.error('Failed to save progress:', err)
       }
@@ -158,18 +179,20 @@ export default function LessonPage() {
       return
     }
 
-    // Save page-level progress for community courses
-    if (isCommunity && workshopId) {
-      try {
-        const stored = localStorage.getItem(`bloom-community-progress-${workshopId}`)
-        const completed: number[] = stored ? JSON.parse(stored) : []
-        if (!completed.includes(currentIndex)) {
-          completed.push(currentIndex)
-          localStorage.setItem(`bloom-community-progress-${workshopId}`, JSON.stringify(completed))
-        }
-      } catch { /* ignore */ }
+    // Check if we're at a module boundary — show module-complete screen
+    if (isModuleBoundary && !showModuleComplete) {
+      setCompletedModuleIndex(currentModuleIndex)
+      setShowModuleComplete(true)
+      setPullDistance(0)
+      setConfirmed(false)
+      setPageAnim('idle')
+      setScrollDir('forward')
+      isTransitioningRef.current = false
+      setIsTransitioning(false)
+      return
     }
 
+    setShowModuleComplete(false)
     setCurrentIndex(prev => prev + 1)
     setSelectedAnswer(null)
     setIsCorrect(null)
@@ -184,7 +207,7 @@ export default function LessonPage() {
     setScrollDir('forward')
     isTransitioningRef.current = false
     setIsTransitioning(false)
-  }, [isLast, lessonId, workshopId, isCommunity, navigate, refreshStats, currentIndex, lesson])
+  }, [isLast, lessonId, navigate, refreshStats, currentIndex, flatPages, isModuleBoundary, showModuleComplete, currentModuleIndex])
 
   // ── Go back to previous page ──
   const doGoBack = useCallback(async () => {
@@ -625,6 +648,72 @@ export default function LessonPage() {
     )
   }
 
+  if (showModuleComplete && completedModuleIndex >= 0 && modules.length > 0) {
+    const completedModule = modules[completedModuleIndex]
+    const nextModule = modules[completedModuleIndex + 1]
+    const moduleProgress = (completedModuleIndex + 1) / modules.length
+
+    return (
+      <div className="fixed inset-0 flex flex-col bg-gradient-to-br from-indigo-500 via-purple-500 to-indigo-600 overflow-hidden" style={{ height: '100dvh' }}>
+        <header className="flex-shrink-0 z-40 bg-white/10 backdrop-blur-xl border-b border-white/10 px-4 py-3">
+          <div className="max-w-2xl mx-auto flex items-center gap-4">
+            <button
+              onClick={() => navigate(-1)}
+              className="p-2 hover:bg-white/10 rounded-xl transition-all duration-200"
+            >
+              <X size={24} className="text-white" />
+            </button>
+            <div className="flex-1">
+              <ProgressBar progress={moduleProgress} color="green" animated />
+            </div>
+          </div>
+        </header>
+
+        <main className="flex-1 flex items-center justify-center px-6">
+          <div className="text-center animate-bounce-in max-w-md">
+            <div className="w-20 h-20 rounded-full bg-white/20 flex items-center justify-center mx-auto mb-6">
+              <BookOpen size={40} className="text-white" />
+            </div>
+            <p className="text-white/60 text-sm font-medium uppercase tracking-wider mb-2">
+              Module {completedModuleIndex + 1} of {modules.length} complete
+            </p>
+            <h1 className="text-3xl font-bold text-white mb-3">{completedModule?.title || 'Module Complete!'}</h1>
+            {completedModule?.description && (
+              <p className="text-white/70 text-base mb-8">{completedModule.description}</p>
+            )}
+
+            {nextModule && (
+              <div className="bg-white/10 backdrop-blur-md rounded-2xl p-5 border border-white/10 mb-8">
+                <p className="text-white/60 text-xs font-medium uppercase tracking-wider mb-1">Up next</p>
+                <h2 className="text-xl font-semibold text-white mb-1">{nextModule.title}</h2>
+                {nextModule.description && (
+                  <p className="text-white/60 text-sm">{nextModule.description}</p>
+                )}
+              </div>
+            )}
+
+            <button
+              onClick={() => {
+                setShowModuleComplete(false)
+                setCurrentIndex(prev => prev + 1)
+                setSelectedAnswer(null)
+                setIsCorrect(null)
+                setShowExplanation(false)
+                setPageAnim('enter')
+                setAnimDir('forward')
+                setTimeout(() => setPageAnim('idle'), 380)
+              }}
+              className="px-8 py-3 bg-white text-indigo-600 rounded-xl font-semibold text-lg hover:bg-white/90 transition-all shadow-lg shadow-black/10 active:scale-95"
+            >
+              {nextModule ? 'Continue to Next Module' : 'Continue'}
+              <ChevronRight size={20} className="inline-block ml-1" />
+            </button>
+          </div>
+        </main>
+      </div>
+    )
+  }
+
   // Compute content transform + opacity based on state
   const contentStyle = (() => {
     const isForward = animDir === 'forward'
@@ -748,21 +837,28 @@ export default function LessonPage() {
 
       {/* ── Metadata Panel (swipe right to reveal) ── */}
       <MetadataPanel
-        workshopLessonId={workshopLessonId}
         lessonId={lessonId}
         currentPageIndex={currentIndex}
         isOpen={metadataOpen}
         onClose={() => setMetadataOpen(false)}
         slideProgress={0}
+        isOfficial={lesson?.isOfficial}
       />
 
       {/* ── Footer ── */}
       <footer ref={footerRef} className="flex-shrink-0 bg-white/80 backdrop-blur-xl border-t border-slate-200/50 px-4 pt-4 pb-5">
         <div className="max-w-2xl mx-auto">
           <div className="flex items-center justify-between w-full">
-            <span className="text-sm text-bloom-text-secondary font-medium tabular-nums">
-              {currentIndex + 1} / {lesson.content.length}
-            </span>
+            <div className="flex flex-col">
+              {currentModule && modules.length > 1 && (
+                <span className="text-xs text-bloom-text-secondary/60 font-medium">
+                  {currentModule.title}
+                </span>
+              )}
+              <span className="text-sm text-bloom-text-secondary font-medium tabular-nums">
+                {currentIndex + 1} / {flatPages.length}
+              </span>
+            </div>
 
             <MorphButton
               pullProgress={pullProgress}

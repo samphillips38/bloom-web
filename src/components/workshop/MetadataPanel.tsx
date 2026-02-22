@@ -3,44 +3,41 @@ import { X, UserCheck, Users, Bot, Sparkles, Clock, FileText, ExternalLink, Chev
 import { api, LessonMetadata } from '../../lib/api'
 
 interface MetadataPanelProps {
-  workshopLessonId?: string | null
   lessonId?: string | null
   currentPageIndex: number
   isOpen: boolean
   onClose: () => void
   slideProgress: number // 0 to 1, for partial reveal during swipe
+  isOfficial?: boolean  // official lessons use /courses metadata, user lessons use /workshop metadata
 }
 
 export default function MetadataPanel({
-  workshopLessonId,
   lessonId,
   currentPageIndex,
   isOpen,
   onClose,
   slideProgress,
+  isOfficial,
 }: MetadataPanelProps) {
   const [metadata, setMetadata] = useState<LessonMetadata | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [loadFailed, setLoadFailed] = useState(false)
 
-  const isWorkshop = !!workshopLessonId
-  const effectiveId = workshopLessonId || lessonId
-
   useEffect(() => {
-    if (isOpen && !metadata && !loadFailed && effectiveId) {
+    if (isOpen && !metadata && !loadFailed && lessonId) {
       loadMetadata()
     }
-  }, [isOpen, effectiveId])
+  }, [isOpen, lessonId])
 
   async function loadMetadata() {
-    if (!effectiveId) return
+    if (!lessonId) return
     try {
       setIsLoading(true)
       setLoadFailed(false)
-      // Use the right endpoint depending on lesson type
-      const { metadata: data } = isWorkshop
-        ? await api.getWorkshopLessonMetadata(effectiveId)
-        : await api.getLessonMetadata(effectiveId)
+      // Use the right endpoint — official lessons go through courses, user-created through workshop
+      const { metadata: data } = isOfficial
+        ? await api.getLessonMetadata(lessonId)
+        : await api.getLessonMetadataWorkshop(lessonId)
       setMetadata(data)
     } catch (error) {
       console.error('Failed to load metadata:', error)
@@ -210,7 +207,6 @@ export default function MetadataPanel({
         ) : (
           <div className="p-4 text-center text-sm text-bloom-text-muted">
             <p>No metadata available for this lesson.</p>
-            <p className="mt-1 text-xs">Metadata is available for community-created lessons.</p>
           </div>
         )}
 

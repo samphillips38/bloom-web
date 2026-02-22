@@ -4,7 +4,7 @@ import {
   Brain, Palette, Calculator, Atom, Code, ChevronRight, Music, Zap,
   Search, Tag, TrendingUp, X,
 } from 'lucide-react'
-import { api, Category, Course, WorkshopLessonSummary, TagInfo } from '../lib/api'
+import { api, Category, Course, LessonSummary, TagInfo } from '../lib/api'
 import Card from '../components/Card'
 import { AIBadge, CreatorTag } from './WorkshopPage'
 
@@ -47,10 +47,10 @@ export default function CoursesPage() {
   const [courses, setCourses] = useState<Course[]>([])
   const [popularTags, setPopularTags] = useState<TagInfo[]>([])
   const [selectedTab, setSelectedTab] = useState<string>('all')
-  const [communityLessons, setCommunityLessons] = useState<WorkshopLessonSummary[]>([])
+  const [communityLessons, setCommunityLessons] = useState<LessonSummary[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
-  const [searchResults, setSearchResults] = useState<WorkshopLessonSummary[] | null>(null)
+  const [searchResults, setSearchResults] = useState<LessonSummary[] | null>(null)
   const [isSearching, setIsSearching] = useState(false)
 
   useEffect(() => {
@@ -103,10 +103,10 @@ export default function CoursesPage() {
 
   async function loadCommunityLessons() {
     try {
-      const result = await api.browseWorkshopLessons({ limit: 20, sort: 'rating' })
+      const result = await api.browseLessons({ limit: 20, sort: 'rating' })
       setCommunityLessons(result.lessons)
     } catch (error) {
-      console.error('Failed to load community lessons:', error)
+      console.error('Failed to load user lessons:', error)
     }
   }
 
@@ -126,7 +126,7 @@ export default function CoursesPage() {
     }
     setIsSearching(true)
     try {
-      const result = await api.browseWorkshopLessons({ search: searchQuery.trim(), limit: 30, sort: 'rating' })
+      const result = await api.browseLessons({ search: searchQuery.trim(), limit: 30, sort: 'rating' })
       setSearchResults(result.lessons)
     } catch (error) {
       console.error('Search failed:', error)
@@ -237,7 +237,7 @@ export default function CoursesPage() {
                 themeColor={lesson.themeColor || '#FF6B35'}
                 creatorName={lesson.authorName}
                 aiInvolvement={lesson.aiInvolvement}
-                onClick={() => navigate(`/community/${lesson.id}`)}
+                onClick={() => navigate(`/lesson/${lesson.id}/overview`)}
                 icon={Brain}
               />
             ))
@@ -353,7 +353,7 @@ export default function CoursesPage() {
               )
             })}
 
-            {/* Community courses — same card style as official */}
+            {/* User-created lessons — same card style as official */}
             {communityLessons.map((lesson) => {
               const color = lesson.themeColor || tabColor
               const Icon = selectedCategory
@@ -368,7 +368,7 @@ export default function CoursesPage() {
                   themeColor={color}
                   creatorName={lesson.authorName}
                   aiInvolvement={lesson.aiInvolvement}
-                  onClick={() => navigate(`/community/${lesson.id}`)}
+                  onClick={() => navigate(`/lesson/${lesson.id}/overview`)}
                   icon={Icon}
                 />
               )

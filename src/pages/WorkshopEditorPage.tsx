@@ -2,12 +2,13 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, Save, Eye, Send, Trash2, Plus, GripVertical, ChevronDown, ChevronUp,
-  Type, Image, HelpCircle, Lightbulb, List, Calculator, Minus, Space, Sparkles,
-  Globe, Lock, Shield, ShieldOff, Settings, X, Loader2, Check, ChevronRight, ChevronLeft,
+  Sparkles, Globe, Lock, Shield, ShieldOff, Settings, X, Loader2, Check,
+  ChevronRight, ChevronLeft, BookOpen, Pencil, FileText, Lightbulb,
 } from 'lucide-react'
 import {
-  api, WorkshopLessonWithContent, ContentData,
+  api, LessonWithContent, ContentData,
   ContentBlock, TextSegment, SourceReference, TagInfo,
+  LessonPlan,
 } from '../lib/api'
 import Card from '../components/Card'
 import Button from '../components/Button'
@@ -23,7 +24,7 @@ export default function WorkshopEditorPage() {
   const navigate = useNavigate()
   const isNew = !lessonId
 
-  const [, setLesson] = useState<WorkshopLessonWithContent | null>(null)
+  const [, setLesson] = useState<LessonWithContent | null>(null)
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [themeColor, setThemeColor] = useState('#FF6B35')
@@ -32,17 +33,19 @@ export default function WorkshopEditorPage() {
   const [tags, setTags] = useState<string[]>([])
   const [tagInput, setTagInput] = useState('')
   const [popularTags, setPopularTags] = useState<TagInfo[]>([])
-  const [pages, setPages] = useState<PageDraft[]>([])
+  const [modules, setModules] = useState<ModuleDraft[]>([])
   const [isLoading, setIsLoading] = useState(!isNew)
   const [isSaving, setIsSaving] = useState(false)
-  const [expandedPage, setExpandedPage] = useState<number | null>(null)
+  const [expandedModule, setExpandedModule] = useState<number | null>(null)
   const [showSettings, setShowSettings] = useState(false)
-  const [showBlockPalette, setShowBlockPalette] = useState(false)
   const [showAIDraft, setShowAIDraft] = useState(false)
   const [showPreview, setShowPreview] = useState(false)
   const [previewPageIndex, setPreviewPageIndex] = useState(0)
   const [savedLessonId, setSavedLessonId] = useState<string | null>(lessonId || null)
-  const [dragIndex, setDragIndex] = useState<number | null>(null)
+  const [moduleDragIndex, setModuleDragIndex] = useState<number | null>(null)
+
+  const totalPages = modules.reduce((sum, m) => sum + m.pages.length, 0)
+  const allPagesFlat: PageDraft[] = modules.flatMap(m => m.pages)
 
   useEffect(() => {
     if (lessonId) {
@@ -55,7 +58,7 @@ export default function WorkshopEditorPage() {
   async function loadLesson(id: string) {
     try {
       setIsLoading(true)
-      const { lesson } = await api.getWorkshopLesson(id)
+      const { lesson } = await api.getEditableLesson(id)
       setLesson(lesson)
       setTitle(lesson.title)
       setDescription(lesson.description || '')
@@ -63,19 +66,93 @@ export default function WorkshopEditorPage() {
       setVisibility(lesson.visibility as 'private' | 'public')
       setEditPolicy(lesson.editPolicy as 'open' | 'approval')
       setTags(lesson.tags || [])
-      setPages(lesson.content.map(c => ({
-        id: c.id,
-        contentType: c.contentType,
-        contentData: c.contentData,
-        sources: c.sources || [],
-        saved: true,
-      })))
+
+      if (lesson.modules && lesson.modules.length > 0) {
+        setModules(lesson.modules.map(m => ({
+          id: m.id,
+          title: m.title,
+          description: m.description || '',
+          pages: (m.content || []).map(c => ({
+            id: c.id,
+            contentType: c.contentType,
+            contentData: c.contentData,
+            sources: c.sources || [],
+            saved: true,
+          })),
+          saved: true,
+        })))
+      } else if (lesson.content && lesson.content.length > 0) {
+        // Legacy: lesson has flat content without modules — wrap in a single module
+        setModules([{
+          id: null,
+          title: 'Module 1',
+          description: '',
+          pages: lesson.content.map(c => ({
+            id: c.id,
+            contentType: c.contentType,
+            contentData: c.contentData,
+            sources: c.sources || [],
+            saved: true,
+          })),
+          saved: false,
+        }])
+      }
     } catch (error) {
       console.error('Failed to load lesson:', error)
     } finally {
       setIsLoading(false)
     }
   }
+
+  // ── Module management ──
+
+  function addModule() {
+    const nextNum = modules.length + 1
+    setModules(prev => [...prev, {
+      id: null,
+      title: `Module ${nextNum}`,
+      description: '',
+      pages: [],
+      saved: false,
+    }])
+    setExpandedModule(modules.length) // expand the new module
+  }
+
+  function updateModuleTitle(mIdx: number, newTitle: string) {
+    setModules(prev => prev.map((m, i) => i === mIdx ? { ...m, title: newTitle, saved: false } : m))
+  }
+
+  function updateModuleDescription(mIdx: number, desc: string) {
+    setModules(prev => prev.map((m, i) => i === mIdx ? { ...m, description: desc, saved: false } : m))
+  }
+
+  async function handleDeleteModule(mIdx: number) {
+    const mod = modules[mIdx]
+    if (mod.id && savedLessonId) {
+      try {
+        await api.deleteLessonModule(mod.id)
+      } catch (error) {
+        console.error('Failed to delete module:', error)
+      }
+    }
+    setModules(prev => prev.filter((_, i) => i !== mIdx))
+    if (expandedModule === mIdx) setExpandedModule(null)
+    else if (expandedModule !== null && expandedModule > mIdx) setExpandedModule(expandedModule - 1)
+  }
+
+  // Module drag reorder
+  function handleModuleDragStart(index: number) { setModuleDragIndex(index) }
+  function handleModuleDragOver(index: number) {
+    if (moduleDragIndex === null || moduleDragIndex === index) return
+    const newModules = [...modules]
+    const [moved] = newModules.splice(moduleDragIndex, 1)
+    newModules.splice(index, 0, { ...moved, saved: false })
+    setModules(newModules)
+    setModuleDragIndex(index)
+  }
+  function handleModuleDragEnd() { setModuleDragIndex(null) }
+
+  // ── Save ──
 
   async function handleSave() {
     if (!title.trim()) return
@@ -86,7 +163,7 @@ export default function WorkshopEditorPage() {
 
       if (!currentId) {
         // Create new lesson
-        const { lesson } = await api.createWorkshopLesson({
+        const { lesson } = await api.createLesson({
           title: title.trim(),
           description: description.trim() || undefined,
           themeColor,
@@ -98,7 +175,7 @@ export default function WorkshopEditorPage() {
         setSavedLessonId(lesson.id)
       } else {
         // Update lesson metadata
-        await api.updateWorkshopLesson(currentId, {
+        await api.updateLesson(currentId, {
           title: title.trim(),
           description: description.trim() || undefined,
           themeColor,
@@ -108,36 +185,74 @@ export default function WorkshopEditorPage() {
         })
       }
 
-      // Save unsaved pages
-      for (let i = 0; i < pages.length; i++) {
-        const page = pages[i]
-        if (!page.saved) {
-          if (page.id) {
-            // Update existing page
-            await api.updateWorkshopContent(currentId, page.id, {
-              contentType: page.contentType,
-              contentData: page.contentData,
-              sources: page.sources,
-            })
-          } else {
-            // Add new page
-            const { content } = await api.addWorkshopContent(currentId, {
-              contentType: page.contentType,
-              contentData: page.contentData,
-              sources: page.sources,
-            })
-            pages[i] = { ...page, id: content.id, saved: true }
+      // Save modules and their pages
+      const updatedModules = [...modules]
+      for (let mIdx = 0; mIdx < updatedModules.length; mIdx++) {
+        const mod = updatedModules[mIdx]
+        let moduleId = mod.id
+
+        if (!moduleId) {
+          // Create new module
+          const { module } = await api.createLessonModule(currentId, {
+            title: mod.title,
+            description: mod.description || undefined,
+          })
+          moduleId = module.id
+          updatedModules[mIdx] = { ...mod, id: moduleId, saved: true }
+        } else if (!mod.saved) {
+          // Update existing module
+          await api.updateLessonModule(moduleId, {
+            title: mod.title,
+            description: mod.description || undefined,
+          })
+          updatedModules[mIdx] = { ...mod, saved: true }
+        }
+
+        // Save pages within this module
+        const updatedPages = [...updatedModules[mIdx].pages]
+        for (let pIdx = 0; pIdx < updatedPages.length; pIdx++) {
+          const page = updatedPages[pIdx]
+          if (!page.saved) {
+            if (page.id) {
+              // Update existing page
+              await api.updateLessonContent(currentId, page.id, {
+                contentType: page.contentType,
+                contentData: page.contentData,
+                sources: page.sources,
+              })
+              updatedPages[pIdx] = { ...page, saved: true }
+            } else {
+              // Add new page
+              const { content } = await api.addLessonContent(currentId, {
+                contentType: page.contentType,
+                contentData: page.contentData,
+                sources: page.sources,
+                moduleId: moduleId!,
+              })
+              updatedPages[pIdx] = { ...page, id: content.id, saved: true }
+            }
           }
+        }
+        updatedModules[mIdx] = { ...updatedModules[mIdx], pages: updatedPages }
+
+        // Reorder pages within module
+        const pageIds = updatedPages.filter(p => p.id).map(p => p.id!)
+        if (pageIds.length > 0) {
+          await api.reorderLessonContent(currentId, pageIds)
         }
       }
 
-      // Reorder pages
-      const pageIds = pages.filter(p => p.id).map(p => p.id!)
-      if (pageIds.length > 0) {
-        await api.reorderWorkshopContent(currentId, pageIds)
+      // Reorder modules
+      const moduleIds = updatedModules.filter(m => m.id).map(m => m.id!)
+      if (moduleIds.length > 0) {
+        await api.reorderLessonModules(currentId, moduleIds)
       }
 
-      setPages(pages.map(p => ({ ...p, saved: true })))
+      setModules(updatedModules.map(m => ({
+        ...m,
+        saved: true,
+        pages: m.pages.map(p => ({ ...p, saved: true })),
+      })))
 
       // If navigating from /workshop/new, redirect to edit URL
       if (isNew && currentId) {
@@ -154,79 +269,22 @@ export default function WorkshopEditorPage() {
     if (!savedLessonId) {
       await handleSave()
     }
-    if (!savedLessonId && !pages.some(p => p.id)) return
+    if (!savedLessonId && !modules.some(m => m.pages.some(p => p.id))) return
 
     const id = savedLessonId!
     try {
-      await api.publishWorkshopLesson(id)
+      await api.publishLesson(id)
       navigate('/workshop')
     } catch (error) {
       console.error('Failed to publish:', error)
     }
   }
 
-  async function handleDeletePage(index: number) {
-    const page = pages[index]
-    if (page.id && savedLessonId) {
-      try {
-        await api.deleteWorkshopContent(savedLessonId, page.id)
-      } catch (error) {
-        console.error('Failed to delete page:', error)
-      }
-    }
-    setPages(prev => prev.filter((_, i) => i !== index))
-    if (expandedPage === index) setExpandedPage(null)
-  }
-
-  function addPage(contentData: ContentData) {
-    const contentType = contentData.type === 'question' ? 'question' : 'page'
-    setPages(prev => [...prev, {
-      id: null,
-      contentType,
-      contentData,
-      sources: [],
-      saved: false,
-    }])
-    setExpandedPage(pages.length)
-    setShowBlockPalette(false)
-  }
-
-  function updatePage(index: number, contentData: ContentData) {
-    setPages(prev => prev.map((p, i) => i === index ? { ...p, contentData, saved: false } : p))
-  }
-
-  function updatePageSources(index: number, sources: SourceReference[]) {
-    setPages(prev => prev.map((p, i) => i === index ? { ...p, sources, saved: false } : p))
-  }
-
-  // Drag reorder
-  function handleDragStart(index: number) {
-    setDragIndex(index)
-  }
-
-  function handleDragOver(index: number) {
-    if (dragIndex === null || dragIndex === index) return
-    const newPages = [...pages]
-    const [moved] = newPages.splice(dragIndex, 1)
-    newPages.splice(index, 0, { ...moved, saved: false })
-    setPages(newPages)
-    setDragIndex(index)
-  }
-
-  function handleDragEnd() {
-    setDragIndex(null)
-  }
-
   // AI Draft callback
-  function handleAIDraftGenerated(generatedPages: ContentData[], generatedTags?: string[]) {
-    const newPages: PageDraft[] = generatedPages.map(cd => ({
-      id: null,
-      contentType: cd.type === 'question' ? 'question' : 'page',
-      contentData: cd,
-      sources: [],
-      saved: false,
-    }))
-    setPages(prev => [...prev, ...newPages])
+  function handleAIDraftGenerated(generatedModules: ModuleDraft[], generatedTitle: string, generatedDescription: string, generatedTags?: string[]) {
+    setModules(prev => [...prev, ...generatedModules])
+    if (!title.trim()) setTitle(generatedTitle)
+    if (!description.trim()) setDescription(generatedDescription)
     // Merge AI-generated tags with existing tags
     if (generatedTags && generatedTags.length > 0) {
       setTags(prev => {
@@ -237,6 +295,75 @@ export default function WorkshopEditorPage() {
     setShowAIDraft(false)
   }
 
+  // Navigate to module editor — saves lesson first to ensure IDs exist
+  async function handleEditModule(mIdx: number) {
+    console.log('[handleEditModule] called with mIdx:', mIdx, 'title:', title, 'savedLessonId:', savedLessonId)
+
+    if (!title.trim()) {
+      alert('Please enter a lesson title before editing modules.')
+      return
+    }
+
+    setIsSaving(true)
+    try {
+      let currentId: string | null = savedLessonId
+
+      // Step 1: Ensure the lesson exists on the server
+      if (!currentId) {
+        console.log('[handleEditModule] Creating new lesson...')
+        const resp = await api.createLesson({
+          title: title.trim(),
+          description: description.trim() || undefined,
+          themeColor,
+          visibility,
+          editPolicy,
+          tags,
+        })
+        console.log('[handleEditModule] Lesson created:', resp)
+        currentId = resp.lesson.id
+        setSavedLessonId(resp.lesson.id)
+      } else {
+        console.log('[handleEditModule] Updating lesson:', currentId)
+        await api.updateLesson(currentId, {
+          title: title.trim(),
+          description: description.trim() || undefined,
+          themeColor,
+          visibility,
+          editPolicy,
+          tags,
+        })
+      }
+
+      // Step 2: Ensure the target module has a server ID
+      const mod = modules[mIdx]
+      let moduleId = mod.id
+      console.log('[handleEditModule] Module:', mod.title, 'existing id:', moduleId)
+
+      if (!moduleId) {
+        console.log('[handleEditModule] Creating module...')
+        const resp = await api.createLessonModule(currentId!, {
+          title: mod.title || 'Untitled Module',
+          description: mod.description || undefined,
+        })
+        console.log('[handleEditModule] Module created:', resp)
+        moduleId = resp.module.id
+        const updatedModules = [...modules]
+        updatedModules[mIdx] = { ...mod, id: moduleId, saved: true }
+        setModules(updatedModules)
+      }
+
+      // Step 3: Navigate to the module editor
+      const targetPath = `/workshop/edit/${currentId}/module/${moduleId}`
+      console.log('[handleEditModule] Navigating to:', targetPath)
+      navigate(targetPath)
+    } catch (error: any) {
+      console.error('[handleEditModule] Error:', error)
+      alert(`Failed to save: ${error?.message || 'Unknown error'}. Please try again.`)
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -245,10 +372,10 @@ export default function WorkshopEditorPage() {
     )
   }
 
-  if (showPreview && pages.length > 0) {
+  if (showPreview && totalPages > 0) {
     return (
       <PreviewOverlay
-        pages={pages}
+        pages={allPagesFlat}
         pageIndex={previewPageIndex}
         onClose={() => setShowPreview(false)}
         onChangeIndex={setPreviewPageIndex}
@@ -270,7 +397,7 @@ export default function WorkshopEditorPage() {
           >
             <Settings size={20} className="text-bloom-text-secondary" />
           </button>
-          {pages.length > 0 && (
+          {totalPages > 0 && (
             <button
               onClick={() => { setPreviewPageIndex(0); setShowPreview(true) }}
               className="p-2 hover:bg-slate-100 rounded-xl transition-colors"
@@ -478,45 +605,155 @@ export default function WorkshopEditorPage() {
         </div>
         <div className="text-left">
           <span className="font-semibold text-purple-900">Generate with AI</span>
-          <p className="text-xs text-purple-600">Describe a topic and AI will create a full lesson draft</p>
+          <p className="text-xs text-purple-600">Describe a topic and AI will plan modules and generate content</p>
         </div>
       </button>
 
-      {/* Content Pages List */}
+      {/* Modules Section */}
       <div className="space-y-3">
         <h3 className="font-semibold text-bloom-text flex items-center gap-2">
-          Pages <span className="text-sm font-normal text-bloom-text-muted">({pages.length})</span>
+          <BookOpen size={18} className="text-indigo-500" />
+          Modules <span className="text-sm font-normal text-bloom-text-muted">({modules.length})</span>
+          {totalPages > 0 && (
+            <span className="text-sm font-normal text-bloom-text-muted">· {totalPages} pages total</span>
+          )}
         </h3>
 
-        {pages.map((page, index) => (
-          <PageCard
-            key={page.id || `draft-${index}`}
-            page={page}
-            index={index}
-            isExpanded={expandedPage === index}
-            onToggle={() => setExpandedPage(expandedPage === index ? null : index)}
-            onUpdate={(data) => updatePage(index, data)}
-            onUpdateSources={(sources) => updatePageSources(index, sources)}
-            onDelete={() => handleDeletePage(index)}
-            onDragStart={() => handleDragStart(index)}
-            onDragOver={() => handleDragOver(index)}
-            onDragEnd={handleDragEnd}
-            isDragging={dragIndex === index}
-          />
+        {modules.map((mod, mIdx) => (
+          <div
+            key={mod.id || `draft-module-${mIdx}`}
+            draggable
+            onDragStart={() => handleModuleDragStart(mIdx)}
+            onDragOver={(e) => { e.preventDefault(); handleModuleDragOver(mIdx) }}
+            onDragEnd={handleModuleDragEnd}
+            className={`transition-all duration-200 ${moduleDragIndex === mIdx ? 'opacity-50 scale-95' : ''}`}
+          >
+            <Card className={`${!mod.saved || mod.pages.some(p => !p.saved) ? 'ring-2 ring-bloom-orange/30' : ''}`}>
+              {/* Module Header */}
+              <div className="flex items-center gap-2">
+                <div className="p-1 cursor-grab active:cursor-grabbing text-bloom-text-muted hover:text-bloom-text-secondary touch-none">
+                  <GripVertical size={18} />
+                </div>
+
+                <div className="w-8 h-8 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center text-xs font-bold flex-shrink-0">
+                  {mIdx + 1}
+                </div>
+
+                <button
+                  onClick={() => setExpandedModule(expandedModule === mIdx ? null : mIdx)}
+                  className="flex-1 text-left min-w-0"
+                >
+                  <span className="font-medium text-bloom-text text-sm truncate block">
+                    {mod.title || 'Untitled Module'}
+                  </span>
+                  <span className="text-xs text-bloom-text-muted">
+                    {mod.pages.length} page{mod.pages.length !== 1 ? 's' : ''}
+                    {mod.description && ` · ${mod.description.substring(0, 40)}${mod.description.length > 40 ? '…' : ''}`}
+                  </span>
+                </button>
+
+                <div className="flex items-center gap-1">
+                  {(!mod.saved || mod.pages.some(p => !p.saved)) && (
+                    <span className="w-2 h-2 rounded-full bg-bloom-orange" title="Unsaved changes" />
+                  )}
+                  <button
+                    onClick={() => setExpandedModule(expandedModule === mIdx ? null : mIdx)}
+                    className="p-1 hover:bg-slate-100 rounded-lg transition-colors"
+                  >
+                    {expandedModule === mIdx ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                  </button>
+                  <button
+                    onClick={() => handleDeleteModule(mIdx)}
+                    className="p-1 hover:bg-red-50 rounded-lg text-bloom-text-muted hover:text-red-500 transition-colors"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Expanded Module Content */}
+              {expandedModule === mIdx && (
+                <div className="mt-4 pt-4 border-t border-slate-100 space-y-3 animate-slide-up">
+                  {/* Module title & description editing */}
+                  <input
+                    type="text"
+                    value={mod.title}
+                    onChange={e => updateModuleTitle(mIdx, e.target.value)}
+                    placeholder="Module title..."
+                    className="w-full text-sm font-semibold text-bloom-text border rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-300"
+                  />
+                  <input
+                    type="text"
+                    value={mod.description}
+                    onChange={e => updateModuleDescription(mIdx, e.target.value)}
+                    placeholder="Module description (optional)..."
+                    className="w-full text-sm text-bloom-text-secondary border rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-300"
+                  />
+
+                  {/* Pages summary list */}
+                  {mod.pages.length > 0 && (
+                    <div className="space-y-1.5 pl-2 border-l-2 border-indigo-100">
+                      {mod.pages.map((page, pIdx) => {
+                        const preview = getPagePreview(page.contentData)
+                        const isQuestion = page.contentData.type === 'question'
+                        return (
+                          <div
+                            key={page.id || `draft-${mIdx}-${pIdx}`}
+                            className="flex items-center gap-2 py-1.5 px-2 rounded-lg bg-slate-50/50"
+                          >
+                            <div className={`w-6 h-6 rounded-md flex items-center justify-center text-xs font-bold flex-shrink-0 ${
+                              isQuestion ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500'
+                            }`}>
+                              {isQuestion ? '?' : <FileText size={12} />}
+                            </div>
+                            <span className="text-sm text-bloom-text truncate flex-1">
+                              {isQuestion
+                                ? `Question: ${(page.contentData as any).question?.substring(0, 50) || 'Untitled'}`
+                                : preview || `Page ${pIdx + 1}`
+                              }
+                            </span>
+                            {!page.saved && (
+                              <span className="w-1.5 h-1.5 rounded-full bg-bloom-orange flex-shrink-0" />
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+
+                  {mod.pages.length === 0 && (
+                    <p className="text-sm text-bloom-text-muted text-center py-3">
+                      No pages yet. Open the module editor to add pages.
+                    </p>
+                  )}
+
+                  {/* Edit Module button — navigates to dedicated module editor */}
+                  <button
+                    onClick={() => handleEditModule(mIdx)}
+                    disabled={isSaving}
+                    className="w-full flex items-center justify-center gap-2 p-3 rounded-xl bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition-all text-sm font-medium"
+                  >
+                    {isSaving ? <Loader2 size={16} className="animate-spin" /> : <Pencil size={16} />}
+                    <span>Edit Module Pages</span>
+                  </button>
+                </div>
+              )}
+            </Card>
+          </div>
         ))}
 
-        {/* Add Page Button */}
+        {/* Add Module Button */}
         <button
-          onClick={() => setShowBlockPalette(true)}
-          className="w-full flex items-center justify-center gap-2 p-4 rounded-2xl border-2 border-dashed border-slate-200 text-bloom-text-muted hover:border-bloom-orange hover:text-bloom-orange transition-all"
+          onClick={addModule}
+          className="w-full flex items-center justify-center gap-2 p-4 rounded-2xl border-2 border-dashed border-indigo-200 text-indigo-400 hover:border-indigo-400 hover:text-indigo-600 hover:bg-indigo-50/30 transition-all"
         >
           <Plus size={20} />
-          <span className="font-medium">Add Page</span>
+          <span className="font-medium">Add Module</span>
         </button>
       </div>
 
       {/* Publish Button */}
-      {pages.length > 0 && (
+      {totalPages > 0 && (
         <div className="fixed bottom-20 left-0 right-0 px-4 z-30">
           <div className="max-w-4xl mx-auto">
             <Button
@@ -531,18 +768,10 @@ export default function WorkshopEditorPage() {
         </div>
       )}
 
-      {/* Block Palette Bottom Sheet */}
-      {showBlockPalette && (
-        <BlockPaletteSheet
-          onSelect={addPage}
-          onClose={() => setShowBlockPalette(false)}
-        />
-      )}
-
       {/* AI Draft Dialog */}
       {showAIDraft && (
         <AIDraftDialog
-          onGenerated={(pages, generatedTags) => handleAIDraftGenerated(pages, generatedTags)}
+          onGenerated={handleAIDraftGenerated}
           onClose={() => setShowAIDraft(false)}
         />
       )}
@@ -562,731 +791,96 @@ interface PageDraft {
   saved: boolean
 }
 
-// ═══════════════════════════════════════════════════════
-//  Page Card (editable, draggable)
-// ═══════════════════════════════════════════════════════
-
-function PageCard({
-  page,
-  index,
-  isExpanded,
-  onToggle,
-  onUpdate,
-  onUpdateSources,
-  onDelete,
-  onDragStart,
-  onDragOver,
-  onDragEnd,
-  isDragging,
-}: {
-  page: PageDraft
-  index: number
-  isExpanded: boolean
-  onToggle: () => void
-  onUpdate: (data: ContentData) => void
-  onUpdateSources: (sources: SourceReference[]) => void
-  onDelete: () => void
-  onDragStart: () => void
-  onDragOver: () => void
-  onDragEnd: () => void
-  isDragging: boolean
-}) {
-  const data = page.contentData
-  const pageLabel = data.type === 'question'
-    ? `Question: ${(data as any).question?.substring(0, 40) || 'Untitled'}...`
-    : `Page ${index + 1}`
-
-  const preview = getPagePreview(data)
-
-  return (
-    <div
-      draggable
-      onDragStart={onDragStart}
-      onDragOver={(e) => { e.preventDefault(); onDragOver() }}
-      onDragEnd={onDragEnd}
-      className={`transition-all duration-200 ${isDragging ? 'opacity-50 scale-95' : ''}`}
-    >
-      <Card className={`${!page.saved ? 'ring-2 ring-bloom-orange/30' : ''}`}>
-        {/* Header */}
-        <div className="flex items-center gap-2">
-          <div
-            className="p-1 cursor-grab active:cursor-grabbing text-bloom-text-muted hover:text-bloom-text-secondary touch-none"
-          >
-            <GripVertical size={18} />
-          </div>
-
-          <div
-            className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold ${
-              data.type === 'question'
-                ? 'bg-amber-100 text-amber-700'
-                : 'bg-slate-100 text-slate-600'
-            }`}
-          >
-            {data.type === 'question' ? '?' : index + 1}
-          </div>
-
-          <button onClick={onToggle} className="flex-1 text-left">
-            <span className="font-medium text-bloom-text text-sm">{pageLabel}</span>
-            {preview && (
-              <p className="text-xs text-bloom-text-muted truncate mt-0.5">{preview}</p>
-            )}
-          </button>
-
-          <div className="flex items-center gap-1">
-            {!page.saved && (
-              <span className="w-2 h-2 rounded-full bg-bloom-orange" title="Unsaved" />
-            )}
-            <button onClick={onToggle} className="p-1 hover:bg-slate-100 rounded-lg transition-colors">
-              {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-            </button>
-            <button onClick={onDelete} className="p-1 hover:bg-red-50 rounded-lg text-bloom-text-muted hover:text-red-500 transition-colors">
-              <Trash2 size={16} />
-            </button>
-          </div>
-        </div>
-
-        {/* Expanded Editor */}
-        {isExpanded && (
-          <div className="mt-4 pt-4 border-t border-slate-100 animate-slide-up">
-            <ContentEditor
-              data={data}
-              sources={page.sources}
-              onUpdate={onUpdate}
-              onUpdateSources={onUpdateSources}
-            />
-          </div>
-        )}
-      </Card>
-    </div>
-  )
+interface ModuleDraft {
+  id: string | null
+  title: string
+  description: string
+  pages: PageDraft[]
+  saved: boolean
 }
 
-// ═══════════════════════════════════════════════════════
-//  Content Editor
-// ═══════════════════════════════════════════════════════
-
-function ContentEditor({
-  data,
-  sources,
-  onUpdate,
-  onUpdateSources,
-}: {
-  data: ContentData
-  sources: SourceReference[]
-  onUpdate: (data: ContentData) => void
-  onUpdateSources: (sources: SourceReference[]) => void
-}) {
-  if (data.type === 'question') {
-    return (
-      <QuestionEditor
-        data={data as Extract<ContentData, { type: 'question' }>}
-        onUpdate={onUpdate}
-      />
-    )
-  }
-
-  if (data.type === 'page') {
-    return (
-      <PageBlocksEditor
-        blocks={(data as Extract<ContentData, { type: 'page' }>).blocks}
-        sources={sources}
-        onUpdate={(blocks) => onUpdate({ type: 'page', blocks })}
-        onUpdateSources={onUpdateSources}
-      />
-    )
-  }
-
-  return <p className="text-sm text-bloom-text-muted">Unsupported content type</p>
-}
 
 // ═══════════════════════════════════════════════════════
-//  Page Blocks Editor
-// ═══════════════════════════════════════════════════════
-
-function PageBlocksEditor({
-  blocks,
-  sources,
-  onUpdate,
-  onUpdateSources,
-}: {
-  blocks: ContentBlock[]
-  sources: SourceReference[]
-  onUpdate: (blocks: ContentBlock[]) => void
-  onUpdateSources: (sources: SourceReference[]) => void
-}) {
-  function addBlock(block: ContentBlock) {
-    onUpdate([...blocks, block])
-  }
-
-  function updateBlock(index: number, block: ContentBlock) {
-    const newBlocks = [...blocks]
-    newBlocks[index] = block
-    onUpdate(newBlocks)
-  }
-
-  function removeBlock(index: number) {
-    onUpdate(blocks.filter((_, i) => i !== index))
-  }
-
-  function moveBlock(index: number, direction: 'up' | 'down') {
-    const newIndex = direction === 'up' ? index - 1 : index + 1
-    if (newIndex < 0 || newIndex >= blocks.length) return
-    const newBlocks = [...blocks]
-    ;[newBlocks[index], newBlocks[newIndex]] = [newBlocks[newIndex], newBlocks[index]]
-    onUpdate(newBlocks)
-  }
-
-  return (
-    <div className="space-y-3">
-      {blocks.map((block, i) => (
-        <BlockEditor
-          key={i}
-          block={block}
-          onUpdate={(b) => updateBlock(i, b)}
-          onRemove={() => removeBlock(i)}
-          onMoveUp={i > 0 ? () => moveBlock(i, 'up') : undefined}
-          onMoveDown={i < blocks.length - 1 ? () => moveBlock(i, 'down') : undefined}
-        />
-      ))}
-
-      {/* Add block inline */}
-      <div className="flex flex-wrap gap-2">
-        {[
-          { type: 'heading', label: 'H', icon: Type },
-          { type: 'paragraph', label: 'P', icon: Type },
-          { type: 'image', label: '🖼', icon: Image },
-          { type: 'callout', label: '💡', icon: Lightbulb },
-          { type: 'bulletList', label: '•', icon: List },
-          { type: 'math', label: '∑', icon: Calculator },
-          { type: 'divider', label: '—', icon: Minus },
-          { type: 'spacer', label: '↕', icon: Space },
-        ].map(item => (
-          <button
-            key={item.type}
-            onClick={() => addBlock(createEmptyBlock(item.type as ContentBlock['type']))}
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-xs font-medium text-bloom-text-secondary transition-colors"
-          >
-            <item.icon size={12} />
-            {item.type}
-          </button>
-        ))}
-      </div>
-
-      {/* Sources */}
-      <div className="mt-4 pt-4 border-t border-slate-100">
-        <SourcesEditor sources={sources} onUpdate={onUpdateSources} />
-      </div>
-    </div>
-  )
-}
-
-// ═══════════════════════════════════════════════════════
-//  Individual Block Editor
-// ═══════════════════════════════════════════════════════
-
-function BlockEditor({
-  block,
-  onUpdate,
-  onRemove,
-  onMoveUp,
-  onMoveDown,
-}: {
-  block: ContentBlock
-  onUpdate: (block: ContentBlock) => void
-  onRemove: () => void
-  onMoveUp?: () => void
-  onMoveDown?: () => void
-}) {
-  const blockLabel = block.type.charAt(0).toUpperCase() + block.type.slice(1)
-
-  return (
-    <div className="group relative bg-slate-50 rounded-xl p-3">
-      {/* Block type label + controls */}
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{blockLabel}</span>
-        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-          {onMoveUp && (
-            <button onClick={onMoveUp} className="p-1 hover:bg-white rounded transition-colors">
-              <ChevronUp size={14} className="text-slate-400" />
-            </button>
-          )}
-          {onMoveDown && (
-            <button onClick={onMoveDown} className="p-1 hover:bg-white rounded transition-colors">
-              <ChevronDown size={14} className="text-slate-400" />
-            </button>
-          )}
-          <button onClick={onRemove} className="p-1 hover:bg-red-50 rounded transition-colors">
-            <X size={14} className="text-red-400" />
-          </button>
-        </div>
-      </div>
-
-      {/* Block-type-specific editors */}
-      {block.type === 'heading' && (
-        <div className="space-y-2">
-          <select
-            value={block.level || 2}
-            onChange={(e) => onUpdate({ ...block, level: parseInt(e.target.value) as 1 | 2 | 3 })}
-            className="text-xs border rounded-lg px-2 py-1"
-          >
-            <option value={1}>H1</option>
-            <option value={2}>H2</option>
-            <option value={3}>H3</option>
-          </select>
-          <SegmentsEditor
-            segments={block.segments}
-            onUpdate={(segments) => onUpdate({ ...block, segments })}
-            placeholder="Heading text..."
-          />
-        </div>
-      )}
-
-      {block.type === 'paragraph' && (
-        <SegmentsEditor
-          segments={block.segments}
-          onUpdate={(segments) => onUpdate({ ...block, segments })}
-          placeholder="Paragraph text..."
-        />
-      )}
-
-      {block.type === 'image' && (
-        <div className="space-y-2">
-          <input
-            type="text"
-            value={block.src}
-            onChange={(e) => onUpdate({ ...block, src: e.target.value })}
-            placeholder="Image URL or emoji:🎯"
-            className="w-full text-sm border rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-bloom-orange/30"
-          />
-          <input
-            type="text"
-            value={block.caption || ''}
-            onChange={(e) => onUpdate({ ...block, caption: e.target.value || undefined })}
-            placeholder="Caption (optional)"
-            className="w-full text-sm border rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-bloom-orange/30"
-          />
-        </div>
-      )}
-
-      {block.type === 'math' && (
-        <div className="space-y-2">
-          <input
-            type="text"
-            value={block.latex}
-            onChange={(e) => onUpdate({ ...block, latex: e.target.value })}
-            placeholder="LaTeX equation, e.g. E = mc^2"
-            className="w-full text-sm font-mono border rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-bloom-orange/30"
-          />
-          <input
-            type="text"
-            value={block.caption || ''}
-            onChange={(e) => onUpdate({ ...block, caption: e.target.value || undefined })}
-            placeholder="Caption (optional)"
-            className="w-full text-sm border rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-bloom-orange/30"
-          />
-        </div>
-      )}
-
-      {block.type === 'callout' && (
-        <div className="space-y-2">
-          <div className="flex gap-2">
-            <select
-              value={block.style}
-              onChange={(e) => onUpdate({ ...block, style: e.target.value as any })}
-              className="text-xs border rounded-lg px-2 py-1"
-            >
-              <option value="info">Info</option>
-              <option value="tip">Tip</option>
-              <option value="warning">Warning</option>
-              <option value="example">Example</option>
-            </select>
-            <input
-              type="text"
-              value={block.title || ''}
-              onChange={(e) => onUpdate({ ...block, title: e.target.value || undefined })}
-              placeholder="Title (optional)"
-              className="flex-1 text-sm border rounded-lg px-3 py-1 outline-none focus:ring-2 focus:ring-bloom-orange/30"
-            />
-          </div>
-          <SegmentsEditor
-            segments={block.segments}
-            onUpdate={(segments) => onUpdate({ ...block, segments })}
-            placeholder="Callout content..."
-          />
-        </div>
-      )}
-
-      {block.type === 'bulletList' && (
-        <BulletListEditor
-          items={block.items}
-          onUpdate={(items) => onUpdate({ ...block, items })}
-        />
-      )}
-
-      {(block.type === 'divider' || block.type === 'spacer') && (
-        <div className="text-xs text-slate-400 text-center py-1">
-          {block.type === 'divider' ? '— Horizontal Divider —' : `Spacer (${(block as any).size || 'md'})`}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ═══════════════════════════════════════════════════════
-//  Text Segments Editor (simplified rich text)
-// ═══════════════════════════════════════════════════════
-
-function SegmentsEditor({
-  segments,
-  onUpdate,
-  placeholder,
-}: {
-  segments: TextSegment[]
-  onUpdate: (segments: TextSegment[]) => void
-  placeholder?: string
-}) {
-  // Simplified: edit as plain text, preserve first segment's formatting
-  const text = segments.map(s => s.text).join('')
-
-  function handleChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
-    const newText = e.target.value
-    if (segments.length === 0 || segments.length === 1) {
-      onUpdate([{ ...segments[0], text: newText }])
-    } else {
-      // When editing, collapse to single segment
-      onUpdate([{ text: newText }])
-    }
-  }
-
-  return (
-    <textarea
-      value={text}
-      onChange={handleChange}
-      placeholder={placeholder}
-      rows={Math.max(2, Math.ceil(text.length / 60))}
-      className="w-full text-sm border rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-bloom-orange/30 resize-none"
-    />
-  )
-}
-
-// ═══════════════════════════════════════════════════════
-//  Bullet List Editor
-// ═══════════════════════════════════════════════════════
-
-function BulletListEditor({
-  items,
-  onUpdate,
-}: {
-  items: TextSegment[][]
-  onUpdate: (items: TextSegment[][]) => void
-}) {
-  function updateItem(index: number, text: string) {
-    const newItems = [...items]
-    newItems[index] = [{ text }]
-    onUpdate(newItems)
-  }
-
-  function addItem() {
-    onUpdate([...items, [{ text: '' }]])
-  }
-
-  function removeItem(index: number) {
-    onUpdate(items.filter((_, i) => i !== index))
-  }
-
-  return (
-    <div className="space-y-2">
-      {items.map((item, i) => (
-        <div key={i} className="flex items-start gap-2">
-          <span className="mt-2.5 w-2 h-2 rounded-full bg-bloom-orange flex-shrink-0" />
-          <input
-            type="text"
-            value={item.map(s => s.text).join('')}
-            onChange={(e) => updateItem(i, e.target.value)}
-            placeholder={`Item ${i + 1}`}
-            className="flex-1 text-sm border rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-bloom-orange/30"
-          />
-          <button onClick={() => removeItem(i)} className="p-1 mt-1 hover:bg-red-50 rounded">
-            <X size={14} className="text-red-400" />
-          </button>
-        </div>
-      ))}
-      <button
-        onClick={addItem}
-        className="text-xs text-bloom-orange font-medium hover:underline"
-      >
-        + Add item
-      </button>
-    </div>
-  )
-}
-
-// ═══════════════════════════════════════════════════════
-//  Question Editor
-// ═══════════════════════════════════════════════════════
-
-function QuestionEditor({
-  data,
-  onUpdate,
-}: {
-  data: Extract<ContentData, { type: 'question' }>
-  onUpdate: (data: ContentData) => void
-}) {
-  function updateField<K extends keyof typeof data>(key: K, value: (typeof data)[K]) {
-    onUpdate({ ...data, [key]: value })
-  }
-
-  function updateOption(index: number, text: string) {
-    const newOptions = [...data.options]
-    newOptions[index] = text
-    updateField('options', newOptions)
-  }
-
-  function addOption() {
-    updateField('options', [...data.options, ''])
-  }
-
-  function removeOption(index: number) {
-    const newOptions = data.options.filter((_, i) => i !== index)
-    updateField('options', newOptions)
-    if (data.correctIndex >= newOptions.length) {
-      updateField('correctIndex', 0)
-    }
-  }
-
-  return (
-    <div className="space-y-3">
-      <textarea
-        value={data.question}
-        onChange={(e) => {
-          onUpdate({
-            ...data,
-            question: e.target.value,
-            questionSegments: [{ text: e.target.value }],
-          })
-        }}
-        placeholder="Question text..."
-        rows={2}
-        className="w-full text-sm font-medium border rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-bloom-orange/30 resize-none"
-      />
-
-      <div className="space-y-2">
-        <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Options</span>
-        {data.options.map((option, i) => (
-          <div key={i} className="flex items-center gap-2">
-            <button
-              onClick={() => updateField('correctIndex', i)}
-              className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold flex-shrink-0 transition-colors ${
-                data.correctIndex === i
-                  ? 'bg-emerald-500 text-white'
-                  : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
-              }`}
-            >
-              {String.fromCharCode(65 + i)}
-            </button>
-            <input
-              type="text"
-              value={option}
-              onChange={(e) => updateOption(i, e.target.value)}
-              placeholder={`Option ${String.fromCharCode(65 + i)}`}
-              className="flex-1 text-sm border rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-bloom-orange/30"
-            />
-            {data.options.length > 2 && (
-              <button onClick={() => removeOption(i)} className="p-1 hover:bg-red-50 rounded">
-                <X size={14} className="text-red-400" />
-              </button>
-            )}
-          </div>
-        ))}
-        {data.options.length < 6 && (
-          <button
-            onClick={addOption}
-            className="text-xs text-bloom-orange font-medium hover:underline"
-          >
-            + Add option
-          </button>
-        )}
-      </div>
-
-      <textarea
-        value={data.explanation || ''}
-        onChange={(e) => {
-          onUpdate({
-            ...data,
-            explanation: e.target.value,
-            explanationSegments: [{ text: e.target.value }],
-          })
-        }}
-        placeholder="Explanation (shown after correct answer)..."
-        rows={2}
-        className="w-full text-sm border rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-bloom-orange/30 resize-none"
-      />
-    </div>
-  )
-}
-
-// ═══════════════════════════════════════════════════════
-//  Sources Editor
-// ═══════════════════════════════════════════════════════
-
-function SourcesEditor({
-  sources,
-  onUpdate,
-}: {
-  sources: SourceReference[]
-  onUpdate: (sources: SourceReference[]) => void
-}) {
-  function addSource() {
-    onUpdate([...sources, { title: '', url: '', description: '' }])
-  }
-
-  function updateSource(index: number, field: keyof SourceReference, value: string) {
-    const newSources = [...sources]
-    newSources[index] = { ...newSources[index], [field]: value }
-    onUpdate(newSources)
-  }
-
-  function removeSource(index: number) {
-    onUpdate(sources.filter((_, i) => i !== index))
-  }
-
-  return (
-    <div className="space-y-2">
-      <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Sources</span>
-      {sources.map((source, i) => (
-        <div key={i} className="flex gap-2">
-          <div className="flex-1 space-y-1">
-            <input
-              type="text"
-              value={source.title}
-              onChange={(e) => updateSource(i, 'title', e.target.value)}
-              placeholder="Source title"
-              className="w-full text-xs border rounded-lg px-2 py-1.5 outline-none focus:ring-2 focus:ring-bloom-orange/30"
-            />
-            <input
-              type="text"
-              value={source.url || ''}
-              onChange={(e) => updateSource(i, 'url', e.target.value)}
-              placeholder="URL (optional)"
-              className="w-full text-xs border rounded-lg px-2 py-1.5 outline-none focus:ring-2 focus:ring-bloom-orange/30"
-            />
-          </div>
-          <button onClick={() => removeSource(i)} className="p-1 hover:bg-red-50 rounded self-start">
-            <X size={14} className="text-red-400" />
-          </button>
-        </div>
-      ))}
-      <button
-        onClick={addSource}
-        className="text-xs text-bloom-orange font-medium hover:underline"
-      >
-        + Add source
-      </button>
-    </div>
-  )
-}
-
-// ═══════════════════════════════════════════════════════
-//  Block Palette Bottom Sheet
-// ═══════════════════════════════════════════════════════
-
-function BlockPaletteSheet({
-  onSelect,
-  onClose,
-}: {
-  onSelect: (data: ContentData) => void
-  onClose: () => void
-}) {
-  const pageTypes = [
-    { label: 'Content Page', description: 'Rich text with headings, images, and more', icon: Type, type: 'page' as const },
-    { label: 'Question', description: 'Multiple choice quiz question', icon: HelpCircle, type: 'question' as const },
-  ]
-
-  function handleSelect(type: 'page' | 'question') {
-    if (type === 'page') {
-      onSelect({
-        type: 'page',
-        blocks: [
-          { type: 'heading', segments: [{ text: '' }], level: 2 },
-          { type: 'paragraph', segments: [{ text: '' }] },
-        ],
-      })
-    } else {
-      onSelect({
-        type: 'question',
-        question: '',
-        questionSegments: [{ text: '' }],
-        options: ['', '', '', ''],
-        correctIndex: 0,
-        explanation: '',
-        explanationSegments: [{ text: '' }],
-      })
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-end">
-      <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative w-full bg-white rounded-t-3xl p-6 animate-slide-up" style={{ paddingBottom: 'max(2.5rem, env(safe-area-inset-bottom, 2.5rem))' }}>
-        <div className="w-10 h-1 bg-slate-300 rounded-full mx-auto mb-4" />
-        <h3 className="font-bold text-lg text-bloom-text mb-3">Add Page</h3>
-        <div className="space-y-3 overflow-y-auto max-h-[60vh]">
-          {pageTypes.map(pt => (
-            <button
-              key={pt.type}
-              onClick={() => handleSelect(pt.type)}
-              className="w-full flex items-center gap-4 p-4 rounded-2xl border border-slate-200 hover:border-bloom-orange hover:bg-orange-50/30 transition-all text-left"
-            >
-              <div className="w-12 h-12 rounded-xl bg-slate-100 flex items-center justify-center flex-shrink-0">
-                <pt.icon size={24} className="text-bloom-text-secondary" />
-              </div>
-              <div>
-                <span className="font-semibold text-bloom-text">{pt.label}</span>
-                <p className="text-sm text-bloom-text-muted">{pt.description}</p>
-              </div>
-            </button>
-          ))}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ═══════════════════════════════════════════════════════
-//  AI Draft Dialog
+//  AI Draft Dialog — Two-phase generation
 // ═══════════════════════════════════════════════════════
 
 function AIDraftDialog({
   onGenerated,
   onClose,
 }: {
-  onGenerated: (pages: ContentData[], tags?: string[]) => void
+  onGenerated: (modules: ModuleDraft[], title: string, description: string, tags?: string[]) => void
   onClose: () => void
 }) {
   const [topic, setTopic] = useState('')
-  const [pageCount, setPageCount] = useState(8)
-  const [isGenerating, setIsGenerating] = useState(false)
+  const [moduleCount, setModuleCount] = useState(3)
+  const [phase, setPhase] = useState<'input' | 'planning' | 'plan-review' | 'generating'>('input')
+  const [plan, setPlan] = useState<LessonPlan | null>(null)
+  const [generatingModuleIdx, setGeneratingModuleIdx] = useState(0)
   const [error, setError] = useState<string | null>(null)
 
-  async function handleGenerate() {
+  async function handlePlan() {
     if (!topic.trim()) return
-    setIsGenerating(true)
+    setPhase('planning')
     setError(null)
 
     try {
-      const { pages, tags } = await api.generateAIDraft(topic.trim(), pageCount)
-      onGenerated(pages, tags)
+      const { plan } = await api.generateAIPlan(topic.trim(), moduleCount)
+      setPlan(plan)
+      setPhase('plan-review')
     } catch (err: any) {
-      setError(err.message || 'Failed to generate lesson')
-    } finally {
-      setIsGenerating(false)
+      setError(err.message || 'Failed to generate plan')
+      setPhase('input')
     }
+  }
+
+  async function handleGenerate() {
+    if (!plan) return
+    setPhase('generating')
+    setError(null)
+
+    const result: ModuleDraft[] = []
+
+    for (let i = 0; i < plan.modules.length; i++) {
+      setGeneratingModuleIdx(i)
+      try {
+        const { pages } = await api.generateAIModuleContent({
+          lessonTitle: plan.title,
+          lessonDescription: plan.description,
+          modulePlan: plan.modules[i],
+          moduleIndex: i,
+          totalModules: plan.modules.length,
+        })
+        result.push({
+          id: null,
+          title: plan.modules[i].title,
+          description: plan.modules[i].description,
+          pages: pages.map(cd => ({
+            id: null,
+            contentType: cd.type === 'question' ? 'question' : 'page',
+            contentData: cd,
+            sources: [],
+            saved: false,
+          })),
+          saved: false,
+        })
+      } catch (err: any) {
+        setError(`Failed to generate module ${i + 1}: ${err.message || 'Unknown error'}`)
+        // Still return what we have so far
+        if (result.length > 0) {
+          onGenerated(result, plan.title, plan.description, plan.tags)
+        }
+        setPhase('plan-review')
+        return
+      }
+    }
+
+    onGenerated(result, plan.title, plan.description, plan.tags)
   }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative w-full max-w-md bg-white rounded-3xl p-6 shadow-2xl animate-pop-in">
+      <div className="relative w-full max-w-md bg-white rounded-3xl p-6 shadow-2xl animate-pop-in max-h-[85vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-500 to-indigo-500 flex items-center justify-center">
@@ -1299,70 +893,160 @@ function AIDraftDialog({
           </button>
         </div>
 
-        <div className="space-y-4">
-          <div>
-            <label className="text-sm font-medium text-bloom-text-secondary block mb-1">Topic</label>
-            <textarea
-              value={topic}
-              onChange={(e) => setTopic(e.target.value)}
-              placeholder="e.g. Introduction to Quantum Computing, The History of Jazz, How Neural Networks Work..."
-              rows={3}
-              className="w-full text-sm border rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-purple-300 resize-none"
-              disabled={isGenerating}
-            />
-          </div>
-
-          <div>
-            <label className="text-sm font-medium text-bloom-text-secondary block mb-1">
-              Pages: {pageCount}
-            </label>
-            <input
-              type="range"
-              min={4}
-              max={15}
-              value={pageCount}
-              onChange={(e) => setPageCount(parseInt(e.target.value))}
-              className="w-full accent-purple-500"
-              disabled={isGenerating}
-            />
-            <div className="flex justify-between text-xs text-bloom-text-muted">
-              <span>4 (quick)</span>
-              <span>15 (detailed)</span>
+        {/* Phase: Input */}
+        {(phase === 'input' || phase === 'planning') && (
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium text-bloom-text-secondary block mb-1">Topic</label>
+              <textarea
+                value={topic}
+                onChange={(e) => setTopic(e.target.value)}
+                placeholder="e.g. Introduction to Quantum Computing, The History of Jazz, How Neural Networks Work..."
+                rows={3}
+                className="w-full text-sm border rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-purple-300 resize-none"
+                disabled={phase === 'planning'}
+              />
             </div>
-          </div>
 
-          {error && (
-            <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-sm text-red-700">
-              {error}
+            <div>
+              <label className="text-sm font-medium text-bloom-text-secondary block mb-1">
+                Approximate modules: {moduleCount}
+              </label>
+              <input
+                type="range"
+                min={2}
+                max={6}
+                value={moduleCount}
+                onChange={(e) => setModuleCount(parseInt(e.target.value))}
+                className="w-full accent-purple-500"
+                disabled={phase === 'planning'}
+              />
+              <div className="flex justify-between text-xs text-bloom-text-muted">
+                <span>2 (quick)</span>
+                <span>6 (detailed)</span>
+              </div>
             </div>
-          )}
 
-          <Button
-            color="orange"
-            onClick={handleGenerate}
-            disabled={!topic.trim() || isGenerating}
-            className="w-full !py-3"
-            style={{ background: 'linear-gradient(135deg, #9333ea, #4f46e5)' }}
-          >
-            {isGenerating ? (
-              <>
-                <Loader2 size={18} className="animate-spin" />
-                <span>Generating lesson...</span>
-              </>
-            ) : (
-              <>
-                <Sparkles size={18} />
-                <span>Generate Lesson</span>
-              </>
+            {error && (
+              <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-sm text-red-700">
+                {error}
+              </div>
             )}
-          </Button>
 
-          {isGenerating && (
+            <Button
+              color="orange"
+              onClick={handlePlan}
+              disabled={!topic.trim() || phase === 'planning'}
+              className="w-full !py-3"
+              style={{ background: 'linear-gradient(135deg, #9333ea, #4f46e5)' }}
+            >
+              {phase === 'planning' ? (
+                <>
+                  <Loader2 size={18} className="animate-spin" />
+                  <span>Planning lesson structure...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles size={18} />
+                  <span>Plan Lesson</span>
+                </>
+              )}
+            </Button>
+
+            {phase === 'planning' && (
+              <p className="text-xs text-center text-bloom-text-muted">
+                AI is planning the module structure...
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Phase: Plan Review */}
+        {phase === 'plan-review' && plan && (
+          <div className="space-y-4">
+            <div className="bg-gradient-to-br from-slate-50 to-indigo-50/30 rounded-xl p-4 border border-slate-100">
+              <h4 className="font-semibold text-bloom-text mb-1">{plan.title}</h4>
+              <p className="text-sm text-bloom-text-secondary">{plan.description}</p>
+              {plan.tags.length > 0 && (
+                <div className="flex flex-wrap gap-1 mt-2">
+                  {plan.tags.map(tag => (
+                    <span key={tag} className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 text-xs font-medium">
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <h4 className="text-sm font-semibold text-bloom-text-secondary uppercase tracking-wide">
+                Module Structure ({plan.modules.length} modules)
+              </h4>
+              {plan.modules.map((mod, i) => (
+                <div key={i} className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl">
+                  <div className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5">
+                    {i + 1}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <span className="font-medium text-bloom-text text-sm block">{mod.title}</span>
+                    <p className="text-xs text-bloom-text-muted mt-0.5">{mod.description}</p>
+                    <span className="text-xs text-indigo-500 font-medium">{mod.pageCount} pages</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {error && (
+              <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-sm text-red-700">
+                {error}
+              </div>
+            )}
+
+            <div className="flex gap-2">
+              <button
+                onClick={() => { setPhase('input'); setPlan(null); setError(null) }}
+                className="flex-1 py-3 rounded-xl border border-slate-200 text-sm font-medium text-bloom-text-secondary hover:bg-slate-50 transition-colors"
+              >
+                Back
+              </button>
+              <Button
+                color="orange"
+                onClick={handleGenerate}
+                className="flex-1 !py-3"
+                style={{ background: 'linear-gradient(135deg, #9333ea, #4f46e5)' }}
+              >
+                <Sparkles size={18} />
+                <span>Generate Content</span>
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Phase: Generating Content */}
+        {phase === 'generating' && plan && (
+          <div className="space-y-4 py-4">
+            <div className="text-center">
+              <Loader2 size={36} className="animate-spin text-purple-500 mx-auto mb-4" />
+              <h4 className="font-semibold text-bloom-text mb-1">Generating Content</h4>
+              <p className="text-sm text-bloom-text-secondary">
+                Module {generatingModuleIdx + 1} of {plan.modules.length}
+              </p>
+              <p className="text-xs text-bloom-text-muted mt-1">
+                {plan.modules[generatingModuleIdx]?.title}
+              </p>
+            </div>
+
+            <ProgressBar
+              progress={(generatingModuleIdx + 0.5) / plan.modules.length}
+              color="orange"
+              animated
+            />
+
             <p className="text-xs text-center text-bloom-text-muted">
-              This may take 15-30 seconds...
+              This may take {plan.modules.length * 10}-{plan.modules.length * 20} seconds total...
             </p>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -2282,33 +1966,6 @@ function PreviewMorphButton({
 // ═══════════════════════════════════════════════════════
 //  Helpers
 // ═══════════════════════════════════════════════════════
-
-function createEmptyBlock(type: ContentBlock['type']): ContentBlock {
-  switch (type) {
-    case 'heading':
-      return { type: 'heading', segments: [{ text: '' }], level: 2 }
-    case 'paragraph':
-      return { type: 'paragraph', segments: [{ text: '' }] }
-    case 'image':
-      return { type: 'image', src: 'emoji:📚', caption: '' }
-    case 'math':
-      return { type: 'math', latex: '', caption: '' }
-    case 'callout':
-      return { type: 'callout', style: 'tip', title: '', segments: [{ text: '' }] }
-    case 'bulletList':
-      return { type: 'bulletList', items: [[{ text: '' }]] }
-    case 'divider':
-      return { type: 'divider' }
-    case 'spacer':
-      return { type: 'spacer', size: 'md' }
-    case 'animation':
-      return { type: 'animation', src: '', caption: '' }
-    case 'interactive':
-      return { type: 'interactive', componentId: '' }
-    default:
-      return { type: 'paragraph', segments: [{ text: '' }] }
-  }
-}
 
 function getPagePreview(data: ContentData): string {
   if (data.type === 'question') {

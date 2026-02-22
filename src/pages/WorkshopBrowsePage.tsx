@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Search, Hammer, ChevronRight, Globe, Tag, Star, X } from 'lucide-react'
-import { api, WorkshopLessonSummary, TagInfo } from '../lib/api'
+import { api, LessonSummary, TagInfo } from '../lib/api'
 import Card from '../components/Card'
 import { AIBadge, CreatorTag } from './WorkshopPage'
 
@@ -11,7 +11,7 @@ export default function WorkshopBrowsePage() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
 
-  const [lessons, setLessons] = useState<WorkshopLessonSummary[]>([])
+  const [lessons, setLessons] = useState<LessonSummary[]>([])
   const [search, setSearch] = useState('')
   const [isLoading, setIsLoading] = useState(true)
   const [total, setTotal] = useState(0)
@@ -47,7 +47,7 @@ export default function WorkshopBrowsePage() {
   async function loadLessons() {
     try {
       setIsLoading(true)
-      const result = await api.browseWorkshopLessons({
+      const result = await api.browseLessons({
         search: search || undefined,
         tag: selectedTag || undefined,
         sort: sortBy,
@@ -208,7 +208,7 @@ export default function WorkshopBrowsePage() {
               <Card
                 key={lesson.id}
                 className="cursor-pointer hover:shadow-bloom-lg transition-all duration-200"
-                onClick={() => navigate(`/community/${lesson.id}`)}
+                onClick={() => navigate(`/lesson/${lesson.id}/overview`)}
               >
                 <div className="flex items-start gap-3">
                   <div
