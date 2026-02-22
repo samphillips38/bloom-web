@@ -233,7 +233,7 @@ export default function CoursesPage() {
               <CourseCard
                 key={lesson.id}
                 title={lesson.title}
-                description={lesson.description}
+                description={lesson.description ?? undefined}
                 themeColor={lesson.themeColor || '#FF6B35'}
                 creatorName={lesson.authorName}
                 aiInvolvement={lesson.aiInvolvement}
@@ -364,7 +364,7 @@ export default function CoursesPage() {
                 <CourseCard
                   key={lesson.id}
                   title={lesson.title}
-                  description={lesson.description}
+                  description={lesson.description ?? undefined}
                   themeColor={color}
                   creatorName={lesson.authorName}
                   aiInvolvement={lesson.aiInvolvement}
