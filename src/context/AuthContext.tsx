@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
+import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react'
 import { api, User, UserStats } from '../lib/api'
 
 interface AuthContextType {
@@ -8,6 +8,8 @@ interface AuthContextType {
   isLoading: boolean
   login: (email: string, password: string) => Promise<void>
   register: (name: string, email: string, password: string) => Promise<void>
+  googleLogin: (credential: string) => Promise<void>
+  appleLogin: (idToken: string, user?: { name?: { firstName?: string; lastName?: string } }) => Promise<void>
   logout: () => void
   refreshStats: () => Promise<void>
 }
@@ -19,9 +21,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [stats, setStats] = useState<UserStats | null>(null)
   const [isLoading, setIsLoading] = useState(true)
 
+  const refreshStats = useCallback(async () => {
+    try {
+      const statsRes = await api.getUserStats()
+      setStats(statsRes)
+    } catch {
+      // Stats might fail if no progress yet
+    }
+  }, [])
+
   useEffect(() => {
-    const token = localStorage.getItem('bloom_token')
-    if (token) {
+    if (api.hasTokens()) {
       loadUserData()
     } else {
       setIsLoading(false)
@@ -40,7 +50,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // Stats might fail if no progress yet
       }
     } catch {
-      localStorage.removeItem('bloom_token')
+      // Token is invalid or expired and couldn't be refreshed
+      api.clearTokens()
     } finally {
       setIsLoading(false)
     }
@@ -48,31 +59,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function login(email: string, password: string) {
     const res = await api.login(email, password)
-    localStorage.setItem('bloom_token', res.token)
     setUser(res.user)
     await refreshStats()
   }
 
   async function register(name: string, email: string, password: string) {
     const res = await api.register(name, email, password)
-    localStorage.setItem('bloom_token', res.token)
     setUser(res.user)
     await refreshStats()
   }
 
-  function logout() {
-    localStorage.removeItem('bloom_token')
-    setUser(null)
-    setStats(null)
+  async function handleGoogleLogin(credential: string) {
+    const res = await api.googleLogin(credential)
+    setUser(res.user)
+    await refreshStats()
   }
 
-  async function refreshStats() {
-    try {
-      const statsRes = await api.getUserStats()
-      setStats(statsRes)
-    } catch {
-      // Ignore errors
-    }
+  async function handleAppleLogin(
+    idToken: string,
+    appleUser?: { name?: { firstName?: string; lastName?: string } }
+  ) {
+    const res = await api.appleLogin(idToken, appleUser)
+    setUser(res.user)
+    await refreshStats()
+  }
+
+  async function logout() {
+    await api.logout()
+    setUser(null)
+    setStats(null)
   }
 
   return (
@@ -83,6 +98,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isLoading,
       login,
       register,
+      googleLogin: handleGoogleLogin,
+      appleLogin: handleAppleLogin,
       logout,
       refreshStats,
     }}>

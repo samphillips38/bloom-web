@@ -231,46 +231,167 @@ export interface GeneratedLesson {
 }
 
 
+interface AuthTokens {
+  user: User
+  token: string
+  refreshToken: string
+}
+
 class ApiClient {
+  private accessToken: string | null = null
+  private refreshToken: string | null = null
+  private refreshPromise: Promise<boolean> | null = null
+
+  constructor() {
+    // Restore tokens from localStorage on init
+    this.accessToken = localStorage.getItem('bloom_token')
+    this.refreshToken = localStorage.getItem('bloom_refresh_token')
+  }
+
+  // ── Token Management ──
+
+  setTokens(accessToken: string, refreshToken: string) {
+    this.accessToken = accessToken
+    this.refreshToken = refreshToken
+    localStorage.setItem('bloom_token', accessToken)
+    localStorage.setItem('bloom_refresh_token', refreshToken)
+  }
+
+  clearTokens() {
+    this.accessToken = null
+    this.refreshToken = null
+    localStorage.removeItem('bloom_token')
+    localStorage.removeItem('bloom_refresh_token')
+  }
+
+  hasTokens(): boolean {
+    return !!this.accessToken
+  }
+
   private getHeaders(): HeadersInit {
     const headers: HeadersInit = {
       'Content-Type': 'application/json',
     }
-    const token = localStorage.getItem('bloom_token')
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`
+    if (this.accessToken) {
+      headers['Authorization'] = `Bearer ${this.accessToken}`
     }
     return headers
   }
 
-  private async request<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  // ── Core Request with Auto-Refresh ──
+
+  private async request<T>(endpoint: string, options?: RequestInit, isRetry = false): Promise<T> {
     const res = await fetch(`${API_BASE}${endpoint}`, {
       ...options,
       headers: this.getHeaders(),
+      credentials: 'include', // send cookies for refresh token
     })
-    
+
+    // If 401 and we have a refresh token, try to refresh and retry once
+    if (res.status === 401 && !isRetry && this.refreshToken) {
+      const refreshed = await this.tryRefresh()
+      if (refreshed) {
+        return this.request<T>(endpoint, options, true)
+      }
+    }
+
     const data = await res.json()
-    
+
     if (!res.ok) {
       throw new Error(data.error?.message || 'Request failed')
     }
-    
+
     return data.data
   }
 
-  // Auth
+  private async tryRefresh(): Promise<boolean> {
+    // Deduplicate concurrent refresh calls
+    if (this.refreshPromise) {
+      return this.refreshPromise
+    }
+
+    this.refreshPromise = (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/auth/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ refreshToken: this.refreshToken }),
+        })
+
+        if (!res.ok) {
+          this.clearTokens()
+          return false
+        }
+
+        const data = await res.json()
+        if (data.data?.token && data.data?.refreshToken) {
+          this.setTokens(data.data.token, data.data.refreshToken)
+          return true
+        }
+
+        this.clearTokens()
+        return false
+      } catch {
+        this.clearTokens()
+        return false
+      } finally {
+        this.refreshPromise = null
+      }
+    })()
+
+    return this.refreshPromise
+  }
+
+  // ── Auth Endpoints ──
+
   async login(email: string, password: string) {
-    return this.request<{ user: User; token: string }>('/auth/login', {
+    const result = await this.request<AuthTokens>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     })
+    this.setTokens(result.token, result.refreshToken)
+    return result
   }
 
   async register(name: string, email: string, password: string) {
-    return this.request<{ user: User; token: string }>('/auth/register', {
+    const result = await this.request<AuthTokens>('/auth/register', {
       method: 'POST',
       body: JSON.stringify({ name, email, password }),
     })
+    this.setTokens(result.token, result.refreshToken)
+    return result
+  }
+
+  async googleLogin(credential: string) {
+    const result = await this.request<AuthTokens>('/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({ credential }),
+    })
+    this.setTokens(result.token, result.refreshToken)
+    return result
+  }
+
+  async appleLogin(idToken: string, user?: { name?: { firstName?: string; lastName?: string } }) {
+    const result = await this.request<AuthTokens>('/auth/apple', {
+      method: 'POST',
+      body: JSON.stringify({ idToken, user }),
+    })
+    this.setTokens(result.token, result.refreshToken)
+    return result
+  }
+
+  async logout() {
+    try {
+      await this.request<{ message: string }>('/auth/logout', {
+        method: 'POST',
+        body: JSON.stringify({ refreshToken: this.refreshToken }),
+      })
+    } catch {
+      // Logout should succeed even if API call fails
+    } finally {
+      this.clearTokens()
+    }
   }
 
   async getProfile() {
