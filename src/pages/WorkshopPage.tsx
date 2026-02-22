@@ -1,13 +1,13 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Plus, Sparkles, Lock, Globe, ChevronRight, Hammer, Bot, UserCheck } from 'lucide-react'
-import { api, WorkshopLessonSummary } from '../lib/api'
+import { api, LessonSummary } from '../lib/api'
 import Card from '../components/Card'
 
 export default function WorkshopPage() {
   const navigate = useNavigate()
-  const [myLessons, setMyLessons] = useState<WorkshopLessonSummary[]>([])
-  const [communityLessons, setCommunityLessons] = useState<WorkshopLessonSummary[]>([])
+  const [myLessons, setMyLessons] = useState<LessonSummary[]>([])
+  const [publicLessons, setPublicLessons] = useState<LessonSummary[]>([])
   const [isLoading, setIsLoading] = useState(true)
 
   useEffect(() => {
@@ -17,11 +17,11 @@ export default function WorkshopPage() {
   async function loadData() {
     try {
       const [myRes, browseRes] = await Promise.all([
-        api.getMyWorkshopLessons(),
-        api.browseWorkshopLessons({ limit: 10 }),
+        api.getMyLessons(),
+        api.browseLessons({ limit: 10 }),
       ])
       setMyLessons(myRes.lessons)
-      setCommunityLessons(browseRes.lessons)
+      setPublicLessons(browseRes.lessons)
     } catch (error) {
       console.error('Failed to load workshop data:', error)
     } finally {
@@ -80,7 +80,7 @@ export default function WorkshopPage() {
         ) : (
           <div className="space-y-3">
             {myLessons.map(lesson => (
-              <WorkshopLessonCard
+              <LessonCard
                 key={lesson.id}
                 lesson={lesson}
                 showStatus
@@ -91,10 +91,10 @@ export default function WorkshopPage() {
         )}
       </div>
 
-      {/* Community Lessons */}
+      {/* Public Lessons */}
       <div>
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg font-bold text-bloom-text">Community Lessons</h2>
+          <h2 className="text-lg font-bold text-bloom-text">Public Lessons</h2>
           <button
             onClick={() => navigate('/workshop/browse')}
             className="flex items-center gap-1 text-sm font-medium text-bloom-orange hover:text-bloom-orange/80 transition-colors"
@@ -103,20 +103,20 @@ export default function WorkshopPage() {
             <ChevronRight size={16} />
           </button>
         </div>
-        {communityLessons.length === 0 ? (
+        {publicLessons.length === 0 ? (
           <Card className="text-center py-8">
-            <p className="text-bloom-text-secondary">No community lessons published yet</p>
+            <p className="text-bloom-text-secondary">No public lessons yet</p>
             <p className="text-sm text-bloom-text-muted mt-1">Be the first to share your knowledge!</p>
           </Card>
         ) : (
           <div className="overflow-x-auto -mx-4 px-4">
             <div className="flex gap-3" style={{ minWidth: 'min-content' }}>
-              {communityLessons.map(lesson => (
+              {publicLessons.map(lesson => (
                 <div key={lesson.id} className="w-64 flex-shrink-0">
-                  <WorkshopLessonCard
+                  <LessonCard
                     lesson={lesson}
                     showAuthor
-                    onClick={() => navigate(`/workshop/edit/${lesson.id}`)}
+                    onClick={() => navigate(`/lesson/${lesson.id}/overview`)}
                   />
                 </div>
               ))}
@@ -129,16 +129,16 @@ export default function WorkshopPage() {
 }
 
 // ═══════════════════════════════════════════════════════
-//  Workshop Lesson Card
+//  Lesson Card
 // ═══════════════════════════════════════════════════════
 
-function WorkshopLessonCard({
+function LessonCard({
   lesson,
   showStatus,
   showAuthor,
   onClick,
 }: {
-  lesson: WorkshopLessonSummary
+  lesson: LessonSummary
   showStatus?: boolean
   showAuthor?: boolean
   onClick: () => void
