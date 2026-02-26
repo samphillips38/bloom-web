@@ -319,7 +319,7 @@ function LessonCard({
 function GeneratingBadge({ job }: { job: GenerationJob }) {
   const label =
     job.status === 'planning' ? 'Planning lesson…' :
-    job.status === 'generating' ? `Generating modules… ${job.progress != null ? `${Math.round(Number(job.progress) * 100)}%` : ''}` :
+    job.status === 'generating' ? `Generating modules… ${job.totalModules > 0 ? `${job.completedModules}/${job.totalModules}` : ''}` :
     'Queued…'
 
   return (
