@@ -967,20 +967,6 @@ function AIDraftDialog({
     return false
   }
 
-  async function readFileAsBase64(file: File): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = () => {
-        const result = reader.result as string
-        // Strip data URL prefix: "data:application/pdf;base64,"
-        const base64 = result.split(',')[1]
-        resolve(base64)
-      }
-      reader.onerror = reject
-      reader.readAsDataURL(file)
-    })
-  }
-
   async function handleSubmit() {
     if (!canSubmit()) return
     setIsSubmitting(true)
@@ -997,14 +983,15 @@ function AIDraftDialog({
         topicText = urlInput.trim()
       } else if (activeTab === 'pdf' && pdfFile) {
         sourceType = 'pdf'
-        sourceContent = await readFileAsBase64(pdfFile)
         topicText = pdfFile.name.replace(/\.pdf$/i, '')
+        // pdfFile is passed directly as binary — no base64 conversion needed
       }
 
       const { lessonId, jobId } = await api.startAIGeneration({
         topic: topicText || 'Lesson from source material',
         moduleCount,
         sourceType,
+        pdfFile: activeTab === 'pdf' ? pdfFile ?? undefined : undefined,
         sourceContent,
         lessonId: currentLessonId ?? undefined,
       })

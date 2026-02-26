@@ -312,9 +312,11 @@ class ApiClient {
     return !!this.accessToken
   }
 
-  private getHeaders(): HeadersInit {
-    const headers: HeadersInit = {
-      'Content-Type': 'application/json',
+  private getHeaders(body?: BodyInit | null): HeadersInit {
+    const headers: Record<string, string> = {}
+    // Let the browser set Content-Type automatically for FormData (multipart boundary)
+    if (!(body instanceof FormData)) {
+      headers['Content-Type'] = 'application/json'
     }
     if (this.accessToken) {
       headers['Authorization'] = `Bearer ${this.accessToken}`
@@ -327,7 +329,7 @@ class ApiClient {
   private async request<T>(endpoint: string, options?: RequestInit, isRetry = false): Promise<T> {
     const res = await fetch(`${API_BASE}${endpoint}`, {
       ...options,
-      headers: this.getHeaders(),
+      headers: this.getHeaders(options?.body),
       credentials: 'include', // send cookies for refresh token
     })
 
@@ -709,10 +711,26 @@ class ApiClient {
     topic: string
     moduleCount?: number
     sourceType?: GenerationSourceType
-    /** For 'url': the URL string. For 'pdf': base64 PDF data. For 'topic': omit. */
+    /** For 'url': the URL string. For 'pdf': pass the File object directly. For 'topic': omit. */
+    pdfFile?: File
     sourceContent?: string
     lessonId?: string
   }) {
+    // PDF uploads must be sent as multipart/form-data so Express can handle large files
+    if (data.sourceType === 'pdf' && data.pdfFile) {
+      const form = new FormData()
+      form.append('topic', data.topic)
+      form.append('sourceType', 'pdf')
+      form.append('pdf', data.pdfFile)
+      if (data.moduleCount != null) form.append('moduleCount', String(data.moduleCount))
+      if (data.lessonId) form.append('lessonId', data.lessonId)
+      // Let the browser set the Content-Type with the correct boundary
+      return this.request<{ lessonId: string; jobId: string }>('/workshop/ai-generate', {
+        method: 'POST',
+        body: form,
+      })
+    }
+
     return this.request<{ lessonId: string; jobId: string }>('/workshop/ai-generate', {
       method: 'POST',
       body: JSON.stringify(data),
