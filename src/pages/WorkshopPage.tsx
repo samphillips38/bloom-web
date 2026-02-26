@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Plus, Sparkles, Lock, Globe, ChevronRight, Hammer, Bot, UserCheck, Trash2, Loader2 } from 'lucide-react'
-import { api, LessonSummary } from '../lib/api'
+import { api, LessonSummary, GenerationJob } from '../lib/api'
 import Card from '../components/Card'
 
 export default function WorkshopPage() {
@@ -11,9 +11,13 @@ export default function WorkshopPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  // Map of lessonId → GenerationJob for lessons with active generation
+  const [generatingLessons, setGeneratingLessons] = useState<Record<string, GenerationJob>>({})
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
     loadData()
+    return () => { if (pollRef.current) clearInterval(pollRef.current) }
   }, [])
 
   async function handleDeleteLesson(id: string) {
@@ -37,11 +41,62 @@ export default function WorkshopPage() {
       ])
       setMyLessons(myRes.lessons)
       setPublicLessons(browseRes.lessons)
+
+      // Check generation status for all my lessons
+      checkAllGenerationStatuses(myRes.lessons.map(l => l.id))
     } catch (error) {
       console.error('Failed to load workshop data:', error)
     } finally {
       setIsLoading(false)
     }
+  }
+
+  async function checkAllGenerationStatuses(lessonIds: string[]) {
+    const activeJobs: Record<string, GenerationJob> = {}
+    await Promise.all(
+      lessonIds.map(async (id) => {
+        try {
+          const { job } = await api.getGenerationStatus(id)
+          if (job && (job.status === 'pending' || job.status === 'planning' || job.status === 'generating')) {
+            activeJobs[id] = job
+          }
+        } catch { /* ignore */ }
+      }),
+    )
+    if (Object.keys(activeJobs).length > 0) {
+      setGeneratingLessons(activeJobs)
+      startPolling(lessonIds)
+    }
+  }
+
+  function startPolling(lessonIds: string[]) {
+    if (pollRef.current) return
+    pollRef.current = setInterval(async () => {
+      const updated: Record<string, GenerationJob> = {}
+      let anyCompleted = false
+      await Promise.all(
+        lessonIds.map(async (id) => {
+          try {
+            const { job } = await api.getGenerationStatus(id)
+            if (!job) return
+            if (job.status === 'pending' || job.status === 'planning' || job.status === 'generating') {
+              updated[id] = job
+            } else if (job.status === 'completed') {
+              anyCompleted = true
+            }
+          } catch { /* ignore */ }
+        }),
+      )
+      setGeneratingLessons(updated)
+      if (Object.keys(updated).length === 0) {
+        clearInterval(pollRef.current!)
+        pollRef.current = null
+        if (anyCompleted) {
+          // Reload to pick up new page counts / titles
+          loadData()
+        }
+      }
+    }, 4000)
   }
 
   if (isLoading) {
@@ -99,6 +154,7 @@ export default function WorkshopPage() {
                 key={lesson.id}
                 lesson={lesson}
                 showStatus
+                generationJob={generatingLessons[lesson.id]}
                 onClick={() => navigate(`/workshop/edit/${lesson.id}`)}
                 onDelete={() => setConfirmDeleteId(lesson.id)}
                 isDeleting={deletingId === lesson.id}
@@ -156,6 +212,7 @@ function LessonCard({
   lesson,
   showStatus,
   showAuthor,
+  generationJob,
   onClick,
   onDelete,
   isDeleting,
@@ -166,6 +223,7 @@ function LessonCard({
   lesson: LessonSummary
   showStatus?: boolean
   showAuthor?: boolean
+  generationJob?: GenerationJob
   onClick: () => void
   onDelete?: () => void
   isDeleting?: boolean
@@ -219,8 +277,10 @@ function LessonCard({
               <p className="text-sm text-bloom-text-secondary line-clamp-2 mt-0.5">{lesson.description}</p>
             )}
             <div className="flex items-center gap-3 mt-2 flex-wrap">
-              {showStatus && (
-                <StatusBadge status={lesson.status} />
+              {generationJob ? (
+                <GeneratingBadge job={generationJob} />
+              ) : (
+                showStatus && <StatusBadge status={lesson.status} />
               )}
               {showAuthor && (
                 <span className="text-xs text-bloom-text-muted">By {lesson.authorName}</span>
@@ -255,6 +315,20 @@ function LessonCard({
 // ═══════════════════════════════════════════════════════
 //  Shared UI Components
 // ═══════════════════════════════════════════════════════
+
+function GeneratingBadge({ job }: { job: GenerationJob }) {
+  const label =
+    job.status === 'planning' ? 'Planning lesson…' :
+    job.status === 'generating' ? `Generating modules… ${job.progress != null ? `${Math.round(Number(job.progress) * 100)}%` : ''}` :
+    'Queued…'
+
+  return (
+    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
+      <Loader2 size={10} className="animate-spin" />
+      {label}
+    </span>
+  )
+}
 
 function StatusBadge({ status }: { status: string }) {
   const config: Record<string, { bg: string; text: string; label: string }> = {

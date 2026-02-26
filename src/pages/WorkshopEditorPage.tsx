@@ -4,11 +4,12 @@ import {
   ArrowLeft, Save, Eye, Send, Trash2, Plus, GripVertical, ChevronDown, ChevronUp,
   Sparkles, Globe, Lock, Shield, ShieldOff, Settings, X, Loader2, Check,
   ChevronRight, ChevronLeft, BookOpen, Pencil, FileText, Lightbulb,
+  Link, Upload, FileUp, AlertCircle, CheckCircle2, RefreshCw,
 } from 'lucide-react'
 import {
   api, LessonWithContent, ContentData,
   ContentBlock, TextSegment, SourceReference, TagInfo,
-  LessonPlan,
+  LessonPlan, GenerationJob, GenerationSourceType,
 } from '../lib/api'
 import Card from '../components/Card'
 import Button from '../components/Button'
@@ -46,16 +47,75 @@ export default function WorkshopEditorPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
 
+  // Generation job state
+  const [generationJob, setGenerationJob] = useState<GenerationJob | null>(null)
+  const generationPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
   const totalPages = modules.reduce((sum, m) => sum + m.pages.length, 0)
   const allPagesFlat: PageDraft[] = modules.flatMap(m => m.pages)
 
   useEffect(() => {
     if (lessonId) {
       loadLesson(lessonId)
+      // Check for an active generation job on load
+      checkGenerationStatus(lessonId)
     }
     // Load popular tags for suggestions
     api.getPopularTags(30).then(res => setPopularTags(res.tags)).catch(() => {})
+
+    return () => {
+      if (generationPollRef.current) clearInterval(generationPollRef.current)
+    }
   }, [lessonId])
+
+  async function checkGenerationStatus(id: string) {
+    try {
+      const { job } = await api.getGenerationStatus(id)
+      if (job) {
+        setGenerationJob(job)
+        if (job.status === 'pending' || job.status === 'planning' || job.status === 'generating') {
+          startPolling(id)
+        }
+      }
+    } catch {
+      // Silently ignore — generation status is optional
+    }
+  }
+
+  function startPolling(id: string) {
+    if (generationPollRef.current) return // already polling
+    generationPollRef.current = setInterval(async () => {
+      try {
+        const { job } = await api.getGenerationStatus(id)
+        if (!job) return
+        setGenerationJob(job)
+        if (job.status === 'completed') {
+          stopPolling()
+          // Reload lesson to pick up generated modules
+          await loadLesson(id)
+        } else if (job.status === 'failed') {
+          stopPolling()
+        }
+      } catch {
+        // ignore transient errors during polling
+      }
+    }, 3000)
+  }
+
+  function stopPolling() {
+    if (generationPollRef.current) {
+      clearInterval(generationPollRef.current)
+      generationPollRef.current = null
+    }
+  }
+
+  // Called when a new async generation job is created from AIDraftDialog
+  function handleGenerationStarted(newLessonId: string, job: GenerationJob) {
+    setSavedLessonId(newLessonId)
+    setGenerationJob(job)
+    navigate(`/workshop/edit/${newLessonId}`, { replace: true })
+    startPolling(newLessonId)
+  }
 
   async function loadLesson(id: string) {
     try {
@@ -295,17 +355,13 @@ export default function WorkshopEditorPage() {
     }
   }
 
-  // AI Draft callback
+  // AI Draft callback (legacy sync path — kept for plan-review flow)
   function handleAIDraftGenerated(generatedModules: ModuleDraft[], generatedTitle: string, generatedDescription: string, generatedTags?: string[]) {
     setModules(prev => [...prev, ...generatedModules])
     if (!title.trim()) setTitle(generatedTitle)
     if (!description.trim()) setDescription(generatedDescription)
-    // Merge AI-generated tags with existing tags
     if (generatedTags && generatedTags.length > 0) {
-      setTags(prev => {
-        const merged = new Set([...prev, ...generatedTags])
-        return Array.from(merged)
-      })
+      setTags(prev => Array.from(new Set([...prev, ...generatedTags])))
     }
     setShowAIDraft(false)
   }
@@ -400,6 +456,14 @@ export default function WorkshopEditorPage() {
 
   return (
     <div className="space-y-4 animate-fade-in pb-32">
+      {/* Generation status banner */}
+      {generationJob && (generationJob.status === 'pending' || generationJob.status === 'planning' || generationJob.status === 'generating' || generationJob.status === 'completed' || generationJob.status === 'failed') && (
+        <GenerationStatusBanner
+          job={generationJob}
+          onDismiss={() => setGenerationJob(null)}
+        />
+      )}
+
       {/* Top bar */}
       <div className="flex items-center justify-between">
         <button onClick={() => navigate('/workshop')} className="p-2 hover:bg-slate-100 rounded-xl transition-colors">
@@ -795,7 +859,9 @@ export default function WorkshopEditorPage() {
       {/* AI Draft Dialog */}
       {showAIDraft && (
         <AIDraftDialog
+          currentLessonId={savedLessonId}
           onGenerated={handleAIDraftGenerated}
+          onGenerationStarted={handleGenerationStarted}
           onClose={() => setShowAIDraft(false)}
         />
       )}
@@ -862,251 +928,367 @@ interface ModuleDraft {
 
 
 // ═══════════════════════════════════════════════════════
-//  AI Draft Dialog — Two-phase generation
+//  AI Draft Dialog — Async generation with source tabs
 // ═══════════════════════════════════════════════════════
 
+type AIDraftTab = 'topic' | 'url' | 'pdf'
+
 function AIDraftDialog({
+  currentLessonId,
   onGenerated,
+  onGenerationStarted,
   onClose,
 }: {
+  currentLessonId: string | null
   onGenerated: (modules: ModuleDraft[], title: string, description: string, tags?: string[]) => void
+  onGenerationStarted: (lessonId: string, job: GenerationJob) => void
   onClose: () => void
 }) {
+  const [activeTab, setActiveTab] = useState<AIDraftTab>('topic')
   const [topic, setTopic] = useState('')
+  const [urlInput, setUrlInput] = useState('')
+  const [pdfFile, setPdfFile] = useState<File | null>(null)
   const [moduleCount, setModuleCount] = useState(3)
-  const [phase, setPhase] = useState<'input' | 'planning' | 'plan-review' | 'generating'>('input')
-  const [plan, setPlan] = useState<LessonPlan | null>(null)
-  const [generatingModuleIdx, setGeneratingModuleIdx] = useState(0)
+  const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
-  async function handlePlan() {
-    if (!topic.trim()) return
-    setPhase('planning')
+  const tabs: { id: AIDraftTab; label: string; icon: React.ReactNode }[] = [
+    { id: 'topic', label: 'Topic', icon: <Sparkles size={14} /> },
+    { id: 'url', label: 'Website', icon: <Link size={14} /> },
+    { id: 'pdf', label: 'PDF', icon: <FileUp size={14} /> },
+  ]
+
+  const canSubmit = () => {
+    if (isSubmitting) return false
+    if (activeTab === 'topic') return topic.trim().length > 0
+    if (activeTab === 'url') return urlInput.trim().startsWith('http')
+    if (activeTab === 'pdf') return pdfFile !== null
+    return false
+  }
+
+  async function readFileAsBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const result = reader.result as string
+        // Strip data URL prefix: "data:application/pdf;base64,"
+        const base64 = result.split(',')[1]
+        resolve(base64)
+      }
+      reader.onerror = reject
+      reader.readAsDataURL(file)
+    })
+  }
+
+  async function handleSubmit() {
+    if (!canSubmit()) return
+    setIsSubmitting(true)
     setError(null)
 
     try {
-      const { plan } = await api.generateAIPlan(topic.trim(), moduleCount)
-      setPlan(plan)
-      setPhase('plan-review')
-    } catch (err: any) {
-      setError(err.message || 'Failed to generate plan')
-      setPhase('input')
-    }
-  }
+      let sourceType: GenerationSourceType = 'topic'
+      let sourceContent: string | undefined
+      let topicText = topic.trim()
 
-  async function handleGenerate() {
-    if (!plan) return
-    setPhase('generating')
-    setError(null)
-
-    const result: ModuleDraft[] = []
-
-    for (let i = 0; i < plan.modules.length; i++) {
-      setGeneratingModuleIdx(i)
-      try {
-        const { pages } = await api.generateAIModuleContent({
-          lessonTitle: plan.title,
-          lessonDescription: plan.description,
-          modulePlan: plan.modules[i],
-          moduleIndex: i,
-          totalModules: plan.modules.length,
-        })
-        result.push({
-          id: null,
-          title: plan.modules[i].title,
-          description: plan.modules[i].description,
-          pages: pages.map(cd => ({
-            id: null,
-            contentType: cd.type === 'question' ? 'question' : 'page',
-            contentData: cd,
-            sources: [],
-            saved: false,
-          })),
-          saved: false,
-        })
-      } catch (err: any) {
-        setError(`Failed to generate module ${i + 1}: ${err.message || 'Unknown error'}`)
-        // Still return what we have so far
-        if (result.length > 0) {
-          onGenerated(result, plan.title, plan.description, plan.tags)
-        }
-        setPhase('plan-review')
-        return
+      if (activeTab === 'url') {
+        sourceType = 'url'
+        sourceContent = urlInput.trim() // send URL — server will fetch it
+        topicText = urlInput.trim()
+      } else if (activeTab === 'pdf' && pdfFile) {
+        sourceType = 'pdf'
+        sourceContent = await readFileAsBase64(pdfFile)
+        topicText = pdfFile.name.replace(/\.pdf$/i, '')
       }
-    }
 
-    onGenerated(result, plan.title, plan.description, plan.tags)
+      const { lessonId, jobId } = await api.startAIGeneration({
+        topic: topicText || 'Lesson from source material',
+        moduleCount,
+        sourceType,
+        sourceContent,
+        lessonId: currentLessonId ?? undefined,
+      })
+
+      // Build a synthetic job object so we can show the banner immediately
+      const job: GenerationJob = {
+        id: jobId,
+        lessonId,
+        userId: '',
+        status: 'pending',
+        totalModules: moduleCount,
+        completedModules: 0,
+        currentModuleTitle: null,
+        sourceType,
+        error: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }
+
+      onGenerationStarted(lessonId, job)
+      onClose()
+    } catch (err: any) {
+      setError(err.message || 'Failed to start generation')
+      setIsSubmitting(false)
+    }
   }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/30 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative w-full max-w-md bg-white rounded-3xl p-6 shadow-2xl animate-pop-in max-h-[85vh] overflow-y-auto">
-        <div className="flex items-center justify-between mb-4">
+      <div className="relative w-full max-w-md bg-white rounded-3xl p-6 shadow-2xl animate-pop-in max-h-[90vh] overflow-y-auto">
+
+        {/* Header */}
+        <div className="flex items-center justify-between mb-5">
           <div className="flex items-center gap-2">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-500 to-indigo-500 flex items-center justify-center">
               <Sparkles size={20} className="text-white" />
             </div>
-            <h3 className="font-bold text-lg text-bloom-text">AI Lesson Generator</h3>
+            <div>
+              <h3 className="font-bold text-lg text-bloom-text leading-tight">AI Lesson Generator</h3>
+              <p className="text-xs text-bloom-text-muted">Generation runs in the background</p>
+            </div>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-xl transition-colors">
             <X size={20} />
           </button>
         </div>
 
-        {/* Phase: Input */}
-        {(phase === 'input' || phase === 'planning') && (
-          <div className="space-y-4">
+        {/* Source Type Tabs */}
+        <div className="flex bg-slate-100 rounded-xl p-1 mb-5">
+          {tabs.map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => { setActiveTab(tab.id); setError(null) }}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-sm font-medium transition-all ${
+                activeTab === tab.id
+                  ? 'bg-white shadow-sm text-bloom-text'
+                  : 'text-bloom-text-muted hover:text-bloom-text-secondary'
+              }`}
+            >
+              {tab.icon}
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="space-y-4">
+          {/* Topic Tab */}
+          {activeTab === 'topic' && (
             <div>
-              <label className="text-sm font-medium text-bloom-text-secondary block mb-1">Topic</label>
+              <label className="text-sm font-medium text-bloom-text-secondary block mb-1.5">
+                What should the lesson be about?
+              </label>
               <textarea
                 value={topic}
-                onChange={(e) => setTopic(e.target.value)}
+                onChange={e => setTopic(e.target.value)}
                 placeholder="e.g. Introduction to Quantum Computing, The History of Jazz, How Neural Networks Work..."
                 rows={3}
                 className="w-full text-sm border rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-purple-300 resize-none"
-                disabled={phase === 'planning'}
+                autoFocus
               />
             </div>
+          )}
 
+          {/* URL Tab */}
+          {activeTab === 'url' && (
             <div>
-              <label className="text-sm font-medium text-bloom-text-secondary block mb-1">
-                Approximate modules: {moduleCount}
+              <label className="text-sm font-medium text-bloom-text-secondary block mb-1.5">
+                Website URL
               </label>
-              <input
-                type="range"
-                min={2}
-                max={6}
-                value={moduleCount}
-                onChange={(e) => setModuleCount(parseInt(e.target.value))}
-                className="w-full accent-purple-500"
-                disabled={phase === 'planning'}
-              />
-              <div className="flex justify-between text-xs text-bloom-text-muted">
-                <span>2 (quick)</span>
-                <span>6 (detailed)</span>
+              <div className="relative">
+                <Link size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-bloom-text-muted" />
+                <input
+                  type="url"
+                  value={urlInput}
+                  onChange={e => setUrlInput(e.target.value)}
+                  placeholder="https://en.wikipedia.org/wiki/..."
+                  className="w-full text-sm border rounded-xl pl-10 pr-4 py-3 outline-none focus:ring-2 focus:ring-purple-300"
+                  autoFocus
+                />
               </div>
-            </div>
-
-            {error && (
-              <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-sm text-red-700">
-                {error}
-              </div>
-            )}
-
-            <Button
-              color="orange"
-              onClick={handlePlan}
-              disabled={!topic.trim() || phase === 'planning'}
-              className="w-full !py-3"
-              style={{ background: 'linear-gradient(135deg, #9333ea, #4f46e5)' }}
-            >
-              {phase === 'planning' ? (
-                <>
-                  <Loader2 size={18} className="animate-spin" />
-                  <span>Planning lesson structure...</span>
-                </>
-              ) : (
-                <>
-                  <Sparkles size={18} />
-                  <span>Plan Lesson</span>
-                </>
-              )}
-            </Button>
-
-            {phase === 'planning' && (
-              <p className="text-xs text-center text-bloom-text-muted">
-                AI is planning the module structure...
+              <p className="text-xs text-bloom-text-muted mt-1.5">
+                The AI will read the page content and build a lesson around it.
               </p>
-            )}
-          </div>
-        )}
-
-        {/* Phase: Plan Review */}
-        {phase === 'plan-review' && plan && (
-          <div className="space-y-4">
-            <div className="bg-gradient-to-br from-slate-50 to-indigo-50/30 rounded-xl p-4 border border-slate-100">
-              <h4 className="font-semibold text-bloom-text mb-1">{plan.title}</h4>
-              <p className="text-sm text-bloom-text-secondary">{plan.description}</p>
-              {plan.tags.length > 0 && (
-                <div className="flex flex-wrap gap-1 mt-2">
-                  {plan.tags.map(tag => (
-                    <span key={tag} className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 text-xs font-medium">
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-              )}
             </div>
+          )}
 
-            <div className="space-y-2">
-              <h4 className="text-sm font-semibold text-bloom-text-secondary uppercase tracking-wide">
-                Module Structure ({plan.modules.length} modules)
-              </h4>
-              {plan.modules.map((mod, i) => (
-                <div key={i} className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl">
-                  <div className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5">
-                    {i + 1}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <span className="font-medium text-bloom-text text-sm block">{mod.title}</span>
-                    <p className="text-xs text-bloom-text-muted mt-0.5">{mod.description}</p>
-                    <span className="text-xs text-indigo-500 font-medium">{mod.pageCount} pages</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {error && (
-              <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-sm text-red-700">
-                {error}
-              </div>
-            )}
-
-            <div className="flex gap-2">
+          {/* PDF Tab */}
+          {activeTab === 'pdf' && (
+            <div>
+              <label className="text-sm font-medium text-bloom-text-secondary block mb-1.5">
+                Upload a PDF
+              </label>
               <button
-                onClick={() => { setPhase('input'); setPlan(null); setError(null) }}
-                className="flex-1 py-3 rounded-xl border border-slate-200 text-sm font-medium text-bloom-text-secondary hover:bg-slate-50 transition-colors"
+                onClick={() => fileInputRef.current?.click()}
+                className={`w-full border-2 border-dashed rounded-xl p-5 flex flex-col items-center gap-2 transition-all ${
+                  pdfFile
+                    ? 'border-purple-300 bg-purple-50'
+                    : 'border-slate-200 hover:border-purple-300 hover:bg-purple-50/30'
+                }`}
               >
-                Back
+                {pdfFile ? (
+                  <>
+                    <div className="w-10 h-10 rounded-xl bg-purple-100 flex items-center justify-center">
+                      <FileText size={20} className="text-purple-600" />
+                    </div>
+                    <span className="text-sm font-medium text-purple-800 text-center break-all">{pdfFile.name}</span>
+                    <span className="text-xs text-purple-500">{(pdfFile.size / 1024 / 1024).toFixed(1)} MB · Click to change</span>
+                  </>
+                ) : (
+                  <>
+                    <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center">
+                      <Upload size={20} className="text-slate-400" />
+                    </div>
+                    <span className="text-sm font-medium text-bloom-text-secondary">Click to choose a PDF</span>
+                    <span className="text-xs text-bloom-text-muted">Text will be extracted and used to create the lesson</span>
+                  </>
+                )}
               </button>
-              <Button
-                color="orange"
-                onClick={handleGenerate}
-                className="flex-1 !py-3"
-                style={{ background: 'linear-gradient(135deg, #9333ea, #4f46e5)' }}
-              >
-                <Sparkles size={18} />
-                <span>Generate Content</span>
-              </Button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".pdf,application/pdf"
+                className="hidden"
+                onChange={e => {
+                  const file = e.target.files?.[0]
+                  if (file) setPdfFile(file)
+                }}
+              />
+            </div>
+          )}
+
+          {/* Module Count Slider (all tabs) */}
+          <div>
+            <label className="text-sm font-medium text-bloom-text-secondary block mb-1.5">
+              Number of modules: <span className="text-purple-600 font-bold">{moduleCount}</span>
+            </label>
+            <input
+              type="range"
+              min={2}
+              max={6}
+              value={moduleCount}
+              onChange={e => setModuleCount(parseInt(e.target.value))}
+              className="w-full accent-purple-500"
+            />
+            <div className="flex justify-between text-xs text-bloom-text-muted mt-0.5">
+              <span>2 (quick ~3 min)</span>
+              <span>6 (detailed ~10 min)</span>
             </div>
           </div>
-        )}
 
-        {/* Phase: Generating Content */}
-        {phase === 'generating' && plan && (
-          <div className="space-y-4 py-4">
-            <div className="text-center">
-              <Loader2 size={36} className="animate-spin text-purple-500 mx-auto mb-4" />
-              <h4 className="font-semibold text-bloom-text mb-1">Generating Content</h4>
-              <p className="text-sm text-bloom-text-secondary">
-                Module {generatingModuleIdx + 1} of {plan.modules.length}
-              </p>
-              <p className="text-xs text-bloom-text-muted mt-1">
-                {plan.modules[generatingModuleIdx]?.title}
-              </p>
-            </div>
-
-            <ProgressBar
-              progress={(generatingModuleIdx + 0.5) / plan.modules.length}
-              color="orange"
-              animated
-            />
-
-            <p className="text-xs text-center text-bloom-text-muted">
-              This may take {plan.modules.length * 10}-{plan.modules.length * 20} seconds total...
+          {/* How it works note */}
+          <div className="flex items-start gap-2.5 p-3 rounded-xl bg-indigo-50 border border-indigo-100">
+            <Sparkles size={15} className="text-indigo-500 flex-shrink-0 mt-0.5" />
+            <p className="text-xs text-indigo-700 leading-relaxed">
+              Generation happens <strong>in the background</strong> — you can continue editing or leave and come back. A progress bar will appear at the top of the editor.
             </p>
           </div>
+
+          {error && (
+            <div className="flex items-start gap-2 p-3 rounded-xl bg-red-50 border border-red-200">
+              <AlertCircle size={15} className="text-red-500 flex-shrink-0 mt-0.5" />
+              <p className="text-sm text-red-700">{error}</p>
+            </div>
+          )}
+
+          <Button
+            color="orange"
+            onClick={handleSubmit}
+            disabled={!canSubmit()}
+            className="w-full !py-3.5"
+            style={{ background: 'linear-gradient(135deg, #9333ea, #4f46e5)' }}
+          >
+            {isSubmitting ? (
+              <>
+                <Loader2 size={18} className="animate-spin" />
+                <span>Starting generation...</span>
+              </>
+            ) : (
+              <>
+                <Sparkles size={18} />
+                <span>Generate Lesson</span>
+              </>
+            )}
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════
+//  Generation Status Banner
+// ═══════════════════════════════════════════════════════
+
+function GenerationStatusBanner({
+  job,
+  onDismiss,
+}: {
+  job: GenerationJob
+  onDismiss: () => void
+}) {
+  const isActive = job.status === 'pending' || job.status === 'planning' || job.status === 'generating'
+  const isCompleted = job.status === 'completed'
+  const isFailed = job.status === 'failed'
+
+  const progress = job.totalModules > 0
+    ? (job.completedModules + (job.status === 'generating' ? 0.3 : 0)) / job.totalModules
+    : 0
+
+  const statusLabel = () => {
+    if (job.status === 'pending') return 'Starting generation...'
+    if (job.status === 'planning') return 'AI is planning the lesson structure...'
+    if (job.status === 'generating') {
+      if (job.currentModuleTitle) return `Generating: ${job.currentModuleTitle}`
+      return `Generating module ${job.completedModules + 1} of ${job.totalModules}...`
+    }
+    if (job.status === 'completed') return 'Generation complete! Scroll down to see your modules.'
+    if (job.status === 'failed') return job.error || 'Generation failed.'
+    return ''
+  }
+
+  const bgClass = isFailed
+    ? 'bg-red-50 border-red-200'
+    : isCompleted
+    ? 'bg-emerald-50 border-emerald-200'
+    : 'bg-purple-50 border-purple-200'
+
+  const textClass = isFailed ? 'text-red-800' : isCompleted ? 'text-emerald-800' : 'text-purple-800'
+  const subTextClass = isFailed ? 'text-red-600' : isCompleted ? 'text-emerald-600' : 'text-purple-600'
+
+  return (
+    <div className={`rounded-2xl border p-4 ${bgClass}`}>
+      <div className="flex items-center gap-3">
+        <div className={`flex-shrink-0 ${isActive ? 'animate-spin' : ''}`}>
+          {isFailed ? (
+            <AlertCircle size={20} className="text-red-500" />
+          ) : isCompleted ? (
+            <CheckCircle2 size={20} className="text-emerald-500" />
+          ) : (
+            <RefreshCw size={20} className="text-purple-500" />
+          )}
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className={`text-sm font-semibold ${textClass}`}>
+            {isActive ? 'AI is generating your lesson' : isCompleted ? 'Lesson generated!' : 'Generation failed'}
+          </p>
+          <p className={`text-xs truncate mt-0.5 ${subTextClass}`}>{statusLabel()}</p>
+          {isActive && job.totalModules > 0 && (
+            <div className="mt-2">
+              <ProgressBar progress={progress} color="orange" animated />
+              <p className={`text-xs mt-1 ${subTextClass}`}>
+                {job.completedModules} of {job.totalModules} modules complete
+              </p>
+            </div>
+          )}
+        </div>
+        {(isCompleted || isFailed) && (
+          <button
+            onClick={onDismiss}
+            className="p-1.5 hover:bg-black/5 rounded-lg transition-colors flex-shrink-0"
+          >
+            <X size={16} className={subTextClass} />
+          </button>
         )}
       </div>
     </div>
