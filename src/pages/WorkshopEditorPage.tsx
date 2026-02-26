@@ -9,7 +9,7 @@ import {
 import {
   api, LessonWithContent, ContentData,
   ContentBlock, TextSegment, SourceReference, TagInfo,
-  LessonPlan, GenerationJob, GenerationSourceType,
+  GenerationJob, GenerationSourceType,
 } from '../lib/api'
 import Card from '../components/Card'
 import Button from '../components/Button'
@@ -935,7 +935,7 @@ type AIDraftTab = 'topic' | 'url' | 'pdf'
 
 function AIDraftDialog({
   currentLessonId,
-  onGenerated,
+  onGenerated: _onGenerated,
   onGenerationStarted,
   onClose,
 }: {
