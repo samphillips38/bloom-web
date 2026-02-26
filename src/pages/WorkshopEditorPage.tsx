@@ -43,6 +43,8 @@ export default function WorkshopEditorPage() {
   const [previewPageIndex, setPreviewPageIndex] = useState(0)
   const [savedLessonId, setSavedLessonId] = useState<string | null>(lessonId || null)
   const [moduleDragIndex, setModuleDragIndex] = useState<number | null>(null)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
 
   const totalPages = modules.reduce((sum, m) => sum + m.pages.length, 0)
   const allPagesFlat: PageDraft[] = modules.flatMap(m => m.pages)
@@ -138,6 +140,19 @@ export default function WorkshopEditorPage() {
     setModules(prev => prev.filter((_, i) => i !== mIdx))
     if (expandedModule === mIdx) setExpandedModule(null)
     else if (expandedModule !== null && expandedModule > mIdx) setExpandedModule(expandedModule - 1)
+  }
+
+  async function handleDeleteLesson() {
+    if (!savedLessonId) return
+    setIsDeleting(true)
+    try {
+      await api.deleteLesson(savedLessonId)
+      navigate('/workshop')
+    } catch (error) {
+      console.error('Failed to delete lesson:', error)
+      setIsDeleting(false)
+      setShowDeleteConfirm(false)
+    }
   }
 
   // Module drag reorder
@@ -397,6 +412,15 @@ export default function WorkshopEditorPage() {
           >
             <Settings size={20} className="text-bloom-text-secondary" />
           </button>
+          {savedLessonId && !isNew && (
+            <button
+              onClick={() => setShowDeleteConfirm(true)}
+              className="p-2 hover:bg-red-50 rounded-xl transition-colors"
+              title="Delete lesson"
+            >
+              <Trash2 size={20} className="text-red-400" />
+            </button>
+          )}
           {totalPages > 0 && (
             <button
               onClick={() => { setPreviewPageIndex(0); setShowPreview(true) }}
@@ -774,6 +798,43 @@ export default function WorkshopEditorPage() {
           onGenerated={handleAIDraftGenerated}
           onClose={() => setShowAIDraft(false)}
         />
+      )}
+
+      {/* Delete Confirmation Dialog */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center p-4 bg-black/40 backdrop-blur-sm" onClick={() => setShowDeleteConfirm(false)}>
+          <div
+            className="w-full max-w-sm bg-white rounded-2xl shadow-2xl p-6 animate-fade-in"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3 mb-2">
+              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+                <Trash2 size={20} className="text-red-500" />
+              </div>
+              <h2 className="text-lg font-bold text-bloom-text">Delete Lesson?</h2>
+            </div>
+            <p className="text-sm text-bloom-text-secondary mb-5 pl-[52px]">
+              This will permanently delete <strong>"{title}"</strong> and all its content. This action cannot be undone.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                disabled={isDeleting}
+                className="flex-1 py-2.5 rounded-xl border border-slate-200 text-bloom-text font-medium hover:bg-slate-50 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteLesson}
+                disabled={isDeleting}
+                className="flex-1 py-2.5 rounded-xl bg-red-500 text-white font-semibold hover:bg-red-600 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {isDeleting ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
+                {isDeleting ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
