@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Brain, ChevronLeft, Check, BookOpen, Puzzle, Pencil, Layers } from 'lucide-react'
+import { Brain, ChevronLeft, Check, BookOpen, Puzzle, Pencil, Layers, Bookmark, BookmarkCheck } from 'lucide-react'
 import { api, LessonWithContent, LessonModule } from '../lib/api'
 import Card from '../components/Card'
 import Button from '../components/Button'
@@ -13,6 +13,8 @@ export default function CommunityCoursePage() {
   const [showOverview, setShowOverview] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [completedPages, setCompletedPages] = useState<Set<number>>(new Set())
+  const [isSaved, setIsSaved] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
 
   useEffect(() => {
     if (lessonId) loadLesson()
@@ -34,10 +36,35 @@ export default function CommunityCoursePage() {
     try {
       const { lesson } = await api.getLesson(lessonId!)
       setLesson(lesson)
+
+      try {
+        const { saved } = await api.checkLessonInLibrary(lessonId!)
+        setIsSaved(saved)
+      } catch {
+        // Library check may fail silently
+      }
     } catch (error) {
       console.error('Failed to load community course:', error)
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  async function toggleLibrary() {
+    if (!lessonId || isSaving) return
+    setIsSaving(true)
+    try {
+      if (isSaved) {
+        await api.removeLessonFromLibrary(lessonId)
+        setIsSaved(false)
+      } else {
+        await api.addLessonToLibrary(lessonId)
+        setIsSaved(true)
+      }
+    } catch (error) {
+      console.error('Failed to update library:', error)
+    } finally {
+      setIsSaving(false)
     }
   }
 
@@ -87,7 +114,7 @@ export default function CommunityCoursePage() {
 
   return (
     <div className="space-y-6 animate-fade-in">
-      {/* Back + Edit Buttons */}
+      {/* Back + Save + Edit Buttons */}
       <div className="flex items-center justify-between">
         <button
           onClick={() => navigate(-1)}
@@ -97,15 +124,39 @@ export default function CommunityCoursePage() {
           <span className="font-medium">Back</span>
         </button>
 
-        {lesson && !lesson.isOfficial && (
+        <div className="flex items-center gap-2">
           <button
-            onClick={() => navigate(`/workshop/edit/${lessonId}`)}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-bloom-text-secondary hover:text-bloom-text transition-colors text-sm font-medium"
+            onClick={toggleLibrary}
+            disabled={isSaving}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-xl transition-all text-sm font-medium ${
+              isSaved
+                ? 'bg-bloom-orange/10 text-bloom-orange hover:bg-bloom-orange/20'
+                : 'bg-slate-100 text-bloom-text-secondary hover:bg-slate-200 hover:text-bloom-text'
+            }`}
           >
-            <Pencil size={14} />
-            Edit
+            {isSaved ? (
+              <>
+                <BookmarkCheck size={15} />
+                Saved
+              </>
+            ) : (
+              <>
+                <Bookmark size={15} />
+                Save
+              </>
+            )}
           </button>
-        )}
+
+          {lesson && !lesson.isOfficial && (
+            <button
+              onClick={() => navigate(`/workshop/edit/${lessonId}`)}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-bloom-text-secondary hover:text-bloom-text transition-colors text-sm font-medium"
+            >
+              <Pencil size={14} />
+              Edit
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Course Header — identical to CourseDetailPage */}

@@ -1,142 +1,403 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Brain, ChevronRight, Sparkles } from 'lucide-react'
-import { api, Course, CourseWithLevels } from '../lib/api'
+import {
+  Brain,
+  BookOpen,
+  Compass,
+  ChevronRight,
+  Bookmark,
+  BookmarkX,
+  Sparkles,
+  Trophy,
+  ArrowRight,
+  Check,
+} from 'lucide-react'
+import { api, LibraryItem } from '../lib/api'
+import { useAuth } from '../context/AuthContext'
 import Card from '../components/Card'
-import Button from '../components/Button'
-import { AIBadge, CreatorTag } from './WorkshopPage'
+
+// ─────────────────────────────────────────────────────────────
+//  Helpers
+// ─────────────────────────────────────────────────────────────
+
+function getGreeting(name?: string): string {
+  const hour = new Date().getHours()
+  const part =
+    hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
+  return name ? `${part}, ${name.split(' ')[0]}` : part
+}
+
+function getCurrentItem(items: LibraryItem[]): LibraryItem | null {
+  // The "currently active" item: has recent activity, isn't fully completed
+  const active = items
+    .filter((i) => !i.isCompleted && i.lastActivityAt)
+    .sort(
+      (a, b) =>
+        new Date(b.lastActivityAt!).getTime() -
+        new Date(a.lastActivityAt!).getTime()
+    )
+  if (active.length > 0) return active[0]
+
+  // Fall back to most recently saved item that isn't completed
+  const unstarted = items
+    .filter((i) => !i.isCompleted)
+    .sort(
+      (a, b) =>
+        new Date(b.savedAt).getTime() - new Date(a.savedAt).getTime()
+    )
+  return unstarted[0] ?? null
+}
+
+function itemTitle(item: LibraryItem) {
+  return item.type === 'course' ? item.courseTitle : item.lessonTitle
+}
+
+function itemThemeColor(item: LibraryItem) {
+  return (
+    (item.type === 'course' ? item.courseThemeColor : item.lessonThemeColor) ??
+    '#FF6B35'
+  )
+}
+
+function itemDescription(item: LibraryItem) {
+  return item.type === 'course'
+    ? item.courseDescription
+    : item.lessonDescription
+}
+
+function itemTotalLabel(item: LibraryItem) {
+  if (item.type === 'course') {
+    return `${item.totalCount} lesson${item.totalCount !== 1 ? 's' : ''}`
+  }
+  return `${item.totalCount} page${item.totalCount !== 1 ? 's' : ''}`
+}
+
+function navigateTo(item: LibraryItem, navigate: ReturnType<typeof useNavigate>) {
+  if (item.type === 'course' && item.courseId) {
+    navigate(`/courses/${item.courseId}`)
+  } else if (item.type === 'lesson' && item.lessonId) {
+    navigate(`/lesson/${item.lessonId}/overview`)
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+//  Progress ring (SVG)
+// ─────────────────────────────────────────────────────────────
+
+function ProgressRing({
+  percent,
+  color,
+  size = 56,
+  stroke = 4,
+}: {
+  percent: number
+  color: string
+  size?: number
+  stroke?: number
+}) {
+  const r = (size - stroke) / 2
+  const circumference = 2 * Math.PI * r
+  const offset = circumference - (percent / 100) * circumference
+
+  return (
+    <svg width={size} height={size} className="-rotate-90">
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={r}
+        fill="none"
+        stroke={`${color}20`}
+        strokeWidth={stroke}
+      />
+      <circle
+        cx={size / 2}
+        cy={size / 2}
+        r={r}
+        fill="none"
+        stroke={color}
+        strokeWidth={stroke}
+        strokeDasharray={circumference}
+        strokeDashoffset={offset}
+        strokeLinecap="round"
+        style={{ transition: 'stroke-dashoffset 0.5s ease' }}
+      />
+    </svg>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────
+//  Currently Learning Hero Card
+// ─────────────────────────────────────────────────────────────
+
+function CurrentlyLearningCard({
+  item,
+  onRemove,
+  navigate,
+}: {
+  item: LibraryItem
+  onRemove: (item: LibraryItem) => void
+  navigate: ReturnType<typeof useNavigate>
+}) {
+  const color = itemThemeColor(item)
+  const title = itemTitle(item) ?? 'Untitled'
+  const desc = itemDescription(item)
+  const percent = item.progressPercent
+  const isStarted = item.completedCount > 0
+
+  const continueLabelText = item.isCompleted
+    ? 'Replay'
+    : isStarted
+    ? 'Continue'
+    : 'Start Learning'
+
+  return (
+    <div
+      className="relative rounded-3xl overflow-hidden cursor-pointer group"
+      style={{
+        background: `linear-gradient(135deg, ${color}18 0%, ${color}08 60%, transparent 100%)`,
+        border: `1.5px solid ${color}25`,
+      }}
+      onClick={() => navigateTo(item, navigate)}
+    >
+      {/* Remove from library button */}
+      <button
+        className="absolute top-4 right-4 z-10 p-1.5 rounded-full bg-white/70 backdrop-blur-sm text-bloom-text-muted hover:text-red-400 hover:bg-white transition-all opacity-0 group-hover:opacity-100"
+        onClick={(e) => {
+          e.stopPropagation()
+          onRemove(item)
+        }}
+        title="Remove from library"
+      >
+        <BookmarkX size={16} />
+      </button>
+
+      <div className="p-6">
+        {/* Badge */}
+        <span
+          className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold tracking-wide mb-4"
+          style={{ backgroundColor: `${color}18`, color }}
+        >
+          <Sparkles size={11} />
+          {isStarted ? 'CONTINUE LEARNING' : 'START LEARNING'}
+        </span>
+
+        {/* Title */}
+        <h2 className="text-xl font-bold text-bloom-text leading-snug mb-1">
+          {title}
+        </h2>
+        {desc && (
+          <p className="text-sm text-bloom-text-secondary line-clamp-2 mb-4">
+            {desc}
+          </p>
+        )}
+
+        {/* Progress section */}
+        <div className="mb-5">
+          {/* Progress bar */}
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-xs text-bloom-text-secondary font-medium">
+              {item.completedCount} of {item.totalCount} {item.type === 'course' ? 'lessons' : 'pages'}
+            </span>
+            <span className="text-xs font-bold" style={{ color }}>
+              {percent}%
+            </span>
+          </div>
+          <div className="h-2 rounded-full bg-black/8 overflow-hidden">
+            <div
+              className="h-full rounded-full transition-all duration-700"
+              style={{
+                width: `${percent}%`,
+                background: `linear-gradient(90deg, ${color}cc, ${color})`,
+              }}
+            />
+          </div>
+        </div>
+
+        {/* CTA */}
+        <button
+          className="flex items-center justify-center gap-2 w-full py-3 rounded-2xl font-semibold text-white text-sm transition-all active:scale-95"
+          style={{ backgroundColor: color }}
+          onClick={(e) => {
+            e.stopPropagation()
+            navigateTo(item, navigate)
+          }}
+        >
+          {continueLabelText}
+          <ArrowRight size={16} />
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────
+//  Library Grid Card
+// ─────────────────────────────────────────────────────────────
+
+function LibraryCard({
+  item,
+  isCurrent,
+  onRemove,
+  navigate,
+}: {
+  item: LibraryItem
+  isCurrent: boolean
+  onRemove: (item: LibraryItem) => void
+  navigate: ReturnType<typeof useNavigate>
+}) {
+  const color = itemThemeColor(item)
+  const title = itemTitle(item) ?? 'Untitled'
+  const percent = item.progressPercent
+
+  return (
+    <div
+      className="relative rounded-2xl overflow-hidden cursor-pointer group active:scale-95 transition-transform"
+      style={{
+        background: `linear-gradient(145deg, ${color}14 0%, ${color}06 100%)`,
+        border: `1.5px solid ${color}20`,
+      }}
+      onClick={() => navigateTo(item, navigate)}
+    >
+      {/* Remove button */}
+      <button
+        className="absolute top-2.5 right-2.5 z-10 p-1 rounded-full bg-white/70 backdrop-blur-sm text-bloom-text-muted hover:text-red-400 hover:bg-white transition-all opacity-0 group-hover:opacity-100"
+        onClick={(e) => {
+          e.stopPropagation()
+          onRemove(item)
+        }}
+        title="Remove from library"
+      >
+        <BookmarkX size={13} />
+      </button>
+
+      <div className="p-4">
+        {/* Icon + ring */}
+        <div className="relative w-14 h-14 mb-3">
+          <ProgressRing percent={percent} color={color} size={56} stroke={4} />
+          <div
+            className="absolute inset-1.5 rounded-full flex items-center justify-center"
+            style={{ backgroundColor: `${color}18` }}
+          >
+            {item.isCompleted ? (
+              <Check size={18} style={{ color }} strokeWidth={2.5} />
+            ) : (
+              <Brain size={18} style={{ color }} />
+            )}
+          </div>
+        </div>
+
+        {/* Title */}
+        <h3 className="font-semibold text-bloom-text text-sm leading-tight line-clamp-2 mb-1">
+          {title}
+        </h3>
+
+        {/* Meta */}
+        <div className="flex items-center justify-between mt-2">
+          <span className="text-xs text-bloom-text-muted">
+            {itemTotalLabel(item)}
+          </span>
+          <span
+            className="text-xs font-bold"
+            style={{ color: item.isCompleted ? color : `${color}cc` }}
+          >
+            {item.isCompleted ? '✓ Done' : `${percent}%`}
+          </span>
+        </div>
+
+        {/* "Currently learning" indicator */}
+        {isCurrent && !item.isCompleted && (
+          <div
+            className="mt-2 flex items-center gap-1 px-2 py-0.5 rounded-full w-fit"
+            style={{ backgroundColor: `${color}18` }}
+          >
+            <div
+              className="w-1.5 h-1.5 rounded-full animate-pulse"
+              style={{ backgroundColor: color }}
+            />
+            <span className="text-xs font-medium" style={{ color }}>
+              Active
+            </span>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────
+//  Empty State
+// ─────────────────────────────────────────────────────────────
+
+function EmptyLibrary({ navigate }: { navigate: ReturnType<typeof useNavigate> }) {
+  return (
+    <div className="text-center py-12 px-4">
+      <div className="w-20 h-20 rounded-3xl bg-gradient-to-br from-bloom-orange/15 to-bloom-orange/5 flex items-center justify-center mx-auto mb-5">
+        <Bookmark size={36} className="text-bloom-orange/60" />
+      </div>
+      <h3 className="text-lg font-bold text-bloom-text mb-2">
+        Your library is empty
+      </h3>
+      <p className="text-sm text-bloom-text-secondary mb-6 max-w-xs mx-auto">
+        Save courses and lessons you want to learn. They'll appear here so you
+        can pick up where you left off.
+      </p>
+      <button
+        onClick={() => navigate('/courses')}
+        className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-bloom-orange text-white font-semibold text-sm hover:opacity-90 transition-opacity active:scale-95"
+      >
+        <Compass size={16} />
+        Discover Lessons
+      </button>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────
+//  Main Page
+// ─────────────────────────────────────────────────────────────
 
 export default function HomePage() {
   const navigate = useNavigate()
-  const [courses, setCourses] = useState<Course[]>([])
-  const [selectedCourse, setSelectedCourse] = useState<CourseWithLevels | null>(null)
-  const [currentIndex, setCurrentIndex] = useState(0)
+  const { user, stats } = useAuth()
+
+  const [library, setLibrary] = useState<LibraryItem[]>([])
   const [isLoading, setIsLoading] = useState(true)
-  const [swipeOffset, setSwipeOffset] = useState(0) // px offset during swipe
-  
+
   useEffect(() => {
-    loadData()
+    loadLibrary()
   }, [])
-  
-  async function loadData() {
+
+  async function loadLibrary() {
     try {
-      const { courses } = await api.getRecommendedCourses()
-      setCourses(courses)
-      
-      if (courses.length > 0) {
-        const { course } = await api.getCourse(courses[0].id)
-        setSelectedCourse(course)
-      }
+      const { items } = await api.getLibrary()
+      setLibrary(items)
     } catch (error) {
-      console.error('Failed to load courses:', error)
+      console.error('Failed to load library:', error)
     } finally {
       setIsLoading(false)
     }
   }
-  
-  // Use refs so touch handlers always see latest values
-  const currentIndexRef = useRef(currentIndex)
-  currentIndexRef.current = currentIndex
-  const coursesRef = useRef(courses)
-  coursesRef.current = courses
 
-  const selectCourse = useCallback(async (index: number) => {
-    if (index === currentIndexRef.current || !coursesRef.current[index]) return
-    setCurrentIndex(index)
-    
+  async function removeItem(item: LibraryItem) {
     try {
-      const { course } = await api.getCourse(coursesRef.current[index].id)
-      setSelectedCourse(course)
+      if (item.type === 'course' && item.courseId) {
+        await api.removeCourseFromLibrary(item.courseId)
+      } else if (item.type === 'lesson' && item.lessonId) {
+        await api.removeLessonFromLibrary(item.lessonId)
+      }
+      setLibrary((prev) => prev.filter((i) => i.id !== item.id))
     } catch (error) {
-      console.error('Failed to load course:', error)
+      console.error('Failed to remove item:', error)
     }
-  }, [])
-  
-  // Swipe handling for recommended course card
-  const cardRef = useRef<HTMLDivElement>(null)
-  const selectCourseRef = useRef(selectCourse)
-  selectCourseRef.current = selectCourse
+  }
 
-  useEffect(() => {
-    const el = cardRef.current
-    if (!el) return
+  const currentItem = getCurrentItem(library)
+  const otherItems = library.filter((i) => i.id !== currentItem?.id)
 
-    let startX: number | null = null
-    let startY: number | null = null
-    let swiping = false
-    let didSwipe = false
+  // Streak & energy from auth context
+  const streak = stats?.streak?.currentStreak ?? 0
+  const energy = stats?.energy ?? 5
 
-    const onTouchStart = (e: TouchEvent) => {
-      startX = e.touches[0].clientX
-      startY = e.touches[0].clientY
-      swiping = false
-      didSwipe = false
-    }
-
-    const onTouchMove = (e: TouchEvent) => {
-      if (startX === null || startY === null) return
-      const dx = e.touches[0].clientX - startX
-      const dy = Math.abs(e.touches[0].clientY - startY)
-      if (!swiping && Math.abs(dx) > 15 && Math.abs(dx) > dy * 1.3) {
-        swiping = true
-      }
-      if (swiping) {
-        e.preventDefault()
-        // Clamp the offset so it feels bounded
-        const maxDrag = 120
-        const clamped = Math.sign(dx) * Math.min(Math.abs(dx), maxDrag)
-        setSwipeOffset(clamped)
-      }
-    }
-
-    const onTouchEnd = (e: TouchEvent) => {
-      if (!swiping || startX === null) {
-        startX = null
-        startY = null
-        setSwipeOffset(0)
-        return
-      }
-      const endX = e.changedTouches[0]?.clientX ?? startX
-      const dx = endX - startX
-      const threshold = 50
-      const idx = currentIndexRef.current
-      const len = coursesRef.current.length
-
-      if (dx < -threshold && idx < len - 1) {
-        selectCourseRef.current(idx + 1)
-        didSwipe = true
-      } else if (dx > threshold && idx > 0) {
-        selectCourseRef.current(idx - 1)
-        didSwipe = true
-      }
-
-      startX = null
-      startY = null
-      swiping = false
-      setSwipeOffset(0)
-
-      // Prevent the tap/click from firing after a swipe
-      if (didSwipe) {
-        const suppress = (ev: Event) => { ev.stopPropagation(); ev.preventDefault() }
-        el.addEventListener('click', suppress, { capture: true, once: true })
-      }
-    }
-
-    el.addEventListener('touchstart', onTouchStart, { passive: true })
-    el.addEventListener('touchmove', onTouchMove, { passive: false })
-    el.addEventListener('touchend', onTouchEnd, { passive: true })
-
-    return () => {
-      el.removeEventListener('touchstart', onTouchStart)
-      el.removeEventListener('touchmove', onTouchMove)
-      el.removeEventListener('touchend', onTouchEnd)
-    }
-  }, [])
-
-  const course = courses[currentIndex]
-  const themeColor = course?.themeColor || '#FF6B35'
-  const firstLessonId = selectedCourse?.levels[0]?.lessons[0]?.id
-  
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -144,150 +405,143 @@ export default function HomePage() {
       </div>
     )
   }
-  
-  return (
-    <div className="space-y-6 animate-fade-in">
-      {/* Recommended Course Card */}
-      {course && (
-        <div
-          ref={cardRef}
-          className="overflow-hidden"
-          style={{ touchAction: 'pan-y' }}
-        >
-        <Card 
-          className="text-center py-8 cursor-pointer hover:shadow-bloom-lg transition-shadow"
-          onClick={() => navigate(`/courses/${course.id}`)}
-          style={{
-            transform: swipeOffset ? `translateX(${swipeOffset}px)` : undefined,
-            opacity: swipeOffset ? 1 - Math.abs(swipeOffset) / 300 : 1,
-            transition: swipeOffset ? 'none' : 'transform 0.3s ease, opacity 0.3s ease',
-          }}
-        >
-          {/* Recommended Badge */}
-          <span 
-            className="inline-block px-4 py-1.5 rounded-full text-xs font-semibold mb-4"
-            style={{ backgroundColor: `${themeColor}20`, color: themeColor }}
-          >
-            RECOMMENDED
-          </span>
-          
-          {/* Title */}
-          <h2 className="text-2xl font-bold text-bloom-text mb-2">{course.title}</h2>
-          
-          {/* Level */}
-          <span className="text-sm font-bold" style={{ color: themeColor }}>
-            LEVEL 1
-          </span>
 
-          {/* Creator + AI tags */}
-          <div className="flex items-center justify-center gap-2 mt-2">
-            {course.creatorName && <CreatorTag name={course.creatorName} />}
-            {course.aiInvolvement && <AIBadge involvement={course.aiInvolvement} />}
+  return (
+    <div className="space-y-6 animate-fade-in pb-2">
+
+      {/* ── Greeting ── */}
+      <div className="flex items-start justify-between pt-1">
+        <div>
+          <h1 className="text-2xl font-bold text-bloom-text leading-tight">
+            {getGreeting(user?.name)}
+          </h1>
+          {streak > 0 && (
+            <p className="text-sm text-bloom-text-secondary mt-0.5">
+              {streak} day streak — keep it going! 🔥
+            </p>
+          )}
+        </div>
+
+        {/* Quick stats pill */}
+        <div className="flex items-center gap-2 bg-white rounded-2xl px-3 py-2 shadow-sm border border-gray-100">
+          <div className="flex items-center gap-1">
+            <Trophy size={14} className="text-amber-500" />
+            <span className="text-xs font-bold text-bloom-text">
+              {stats?.completedLessons ?? 0}
+            </span>
           </div>
-          
-          {/* Illustration */}
-          <div className="my-8 flex justify-center">
-            <div 
-              className="relative w-48 h-48 rounded-full flex items-center justify-center animate-pulse-soft"
-              style={{ backgroundColor: `${themeColor}15` }}
-            >
-              <div 
-                className="absolute inset-4 rounded-full"
-                style={{ backgroundColor: `${themeColor}10` }}
-              />
-              <Brain size={80} style={{ color: themeColor }} />
-              
-              {/* Floating elements */}
-              <Sparkles 
-                size={24} 
-                className="absolute top-4 right-8 animate-bounce" 
-                style={{ color: themeColor, animationDelay: '0.5s' }} 
-              />
-            </div>
+          <div className="w-px h-3 bg-gray-200" />
+          <div className="flex items-center gap-1">
+            <BookOpen size={14} className="text-blue-400" />
+            <span className="text-xs font-bold text-bloom-text">
+              {library.length}
+            </span>
           </div>
-          
-          {/* Pagination dots */}
-          {courses.length > 1 && (
-            <div className="flex justify-center gap-2">
-              {courses.slice(0, 5).map((_, index) => (
-                <button
-                  key={index}
-                  onClick={(e) => { e.stopPropagation(); selectCourse(index); }}
-                  className={`w-2 h-2 rounded-full transition-all duration-200 ${
-                    index === currentIndex ? 'w-6' : ''
-                  }`}
-                  style={{ 
-                    backgroundColor: index === currentIndex ? themeColor : '#D1D5DB'
-                  }}
+        </div>
+      </div>
+
+      {/* ── Currently Learning Hero ── */}
+      {currentItem ? (
+        <div>
+          <CurrentlyLearningCard
+            item={currentItem}
+            onRemove={removeItem}
+            navigate={navigate}
+          />
+        </div>
+      ) : library.length === 0 ? null : (
+        /* All items are completed — show a completion banner */
+        <Card className="text-center py-6">
+          <div className="w-14 h-14 rounded-2xl bg-green-50 flex items-center justify-center mx-auto mb-3">
+            <Trophy size={28} className="text-green-500" />
+          </div>
+          <h3 className="font-bold text-bloom-text mb-1">
+            You're all caught up!
+          </h3>
+          <p className="text-sm text-bloom-text-secondary mb-4">
+            You've completed everything in your library.
+          </p>
+          <button
+            onClick={() => navigate('/courses')}
+            className="inline-flex items-center gap-1.5 text-sm font-semibold text-bloom-orange hover:underline"
+          >
+            Find more to learn <ChevronRight size={14} />
+          </button>
+        </Card>
+      )}
+
+      {/* ── My Library section ── */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <h2 className="text-lg font-bold text-bloom-text">My Library</h2>
+            {library.length > 0 && (
+              <span className="px-2 py-0.5 rounded-full bg-slate-100 text-xs font-semibold text-bloom-text-secondary">
+                {library.length}
+              </span>
+            )}
+          </div>
+          <button
+            onClick={() => navigate('/courses')}
+            className="flex items-center gap-1 text-sm font-medium text-bloom-orange hover:text-bloom-orange/80 transition-colors"
+          >
+            Browse
+            <ChevronRight size={15} />
+          </button>
+        </div>
+
+        {library.length === 0 ? (
+          <EmptyLibrary navigate={navigate} />
+        ) : (
+          <>
+            {/* Currently active item also shown in grid if other items exist */}
+            <div className="grid grid-cols-2 gap-3">
+              {/* Show the current item first in the grid too (if there are others) */}
+              {currentItem && otherItems.length > 0 && (
+                <LibraryCard
+                  key={currentItem.id}
+                  item={currentItem}
+                  isCurrent={true}
+                  onRemove={removeItem}
+                  navigate={navigate}
+                />
+              )}
+              {otherItems.map((item) => (
+                <LibraryCard
+                  key={item.id}
+                  item={item}
+                  isCurrent={false}
+                  onRemove={removeItem}
+                  navigate={navigate}
                 />
               ))}
-            </div>
-          )}
-        </Card>
-        </div>
-      )}
-      
-      {/* Lessons Section */}
-      {selectedCourse && (
-        <Card>
-          <div className="space-y-4">
-            {selectedCourse.levels[0]?.lessons.slice(0, 2).map((lesson, index) => (
-              <div 
-                key={lesson.id}
-                className="flex items-center gap-4 py-2"
-              >
-                <div 
-                  className={`w-14 h-14 rounded-full flex items-center justify-center ${
-                    index === 0 ? '' : 'opacity-50'
-                  }`}
-                  style={{ 
-                    backgroundColor: index === 0 ? `${themeColor}15` : '#F3F4F6'
-                  }}
-                >
-                  <Brain 
-                    size={28} 
-                    style={{ color: index === 0 ? themeColor : '#9CA3AF' }} 
-                  />
-                </div>
-                
-                <div className="flex-1">
-                  <h3 className={`font-semibold ${index === 0 ? 'text-bloom-text' : 'text-bloom-text-secondary'}`}>
-                    {lesson.title}
-                  </h3>
-                  {lesson.type === 'exercise' && (
-                    <span className="text-sm text-bloom-text-muted">Exercise</span>
-                  )}
-                </div>
-                
-                <div 
-                  className={`w-6 h-6 rounded-full border-2 ${
-                    index === 0 ? '' : 'opacity-30'
-                  }`}
-                  style={{ borderColor: index === 0 ? themeColor : '#D1D5DB' }}
+              {/* If only one item and it's the current, still show it in grid */}
+              {currentItem && otherItems.length === 0 && (
+                <LibraryCard
+                  key={currentItem.id}
+                  item={currentItem}
+                  isCurrent={true}
+                  onRemove={removeItem}
+                  navigate={navigate}
                 />
-              </div>
-            ))}
-            
-            {selectedCourse.levels[0]?.lessons.length > 2 && (
-              <button 
-                className="flex items-center gap-2 text-bloom-text-secondary hover:text-bloom-text transition-colors"
-                onClick={() => navigate(`/courses/${course.id}`)}
-              >
-                <span className="text-sm font-medium">View all lessons</span>
-                <ChevronRight size={16} />
-              </button>
-            )}
-            
-            <Button 
-              color="orange"
-              onClick={() => firstLessonId && navigate(`/lesson/${firstLessonId}`)}
-              disabled={!firstLessonId}
-              style={{ backgroundColor: themeColor }}
-            >
-              Start
-            </Button>
-          </div>
-        </Card>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ── Discover nudge (always visible at bottom if library has items) ── */}
+      {library.length > 0 && (
+        <button
+          onClick={() => navigate('/courses')}
+          className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl border-2 border-dashed border-slate-200 text-bloom-text-secondary hover:border-bloom-orange hover:text-bloom-orange transition-all text-sm font-medium group"
+        >
+          <Compass
+            size={16}
+            className="group-hover:rotate-12 transition-transform"
+          />
+          Discover more lessons
+        </button>
       )}
     </div>
   )

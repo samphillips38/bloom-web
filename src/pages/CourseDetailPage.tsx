@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Brain, ChevronLeft, Check, Lock, BookOpen, Puzzle } from 'lucide-react'
+import { Brain, ChevronLeft, Check, Lock, BookOpen, Puzzle, Bookmark, BookmarkCheck } from 'lucide-react'
 import { api, CourseWithLevels, UserProgress } from '../lib/api'
 import Card from '../components/Card'
 import Button from '../components/Button'
@@ -14,6 +14,8 @@ export default function CourseDetailPage() {
   const [progress, setProgress] = useState<UserProgress[]>([])
   const [showOverview, setShowOverview] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
+  const [isSaved, setIsSaved] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
   
   useEffect(() => {
     if (courseId) loadCourse()
@@ -30,10 +32,35 @@ export default function CourseDetailPage() {
       } catch {
         // Progress may not exist yet
       }
+
+      try {
+        const { saved } = await api.checkCourseInLibrary(courseId!)
+        setIsSaved(saved)
+      } catch {
+        // Library check may fail silently
+      }
     } catch (error) {
       console.error('Failed to load course:', error)
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  async function toggleLibrary() {
+    if (!courseId || isSaving) return
+    setIsSaving(true)
+    try {
+      if (isSaved) {
+        await api.removeCourseFromLibrary(courseId)
+        setIsSaved(false)
+      } else {
+        await api.addCourseToLibrary(courseId)
+        setIsSaved(true)
+      }
+    } catch (error) {
+      console.error('Failed to update library:', error)
+    } finally {
+      setIsSaving(false)
     }
   }
   
@@ -83,14 +110,38 @@ export default function CourseDetailPage() {
   
   return (
     <div className="space-y-6 animate-fade-in">
-      {/* Back Button */}
-      <button 
-        onClick={() => navigate(-1)}
-        className="flex items-center gap-2 text-bloom-text-secondary hover:text-bloom-text transition-colors"
-      >
-        <ChevronLeft size={20} />
-        <span className="font-medium">Back</span>
-      </button>
+      {/* Back + Save Buttons */}
+      <div className="flex items-center justify-between">
+        <button 
+          onClick={() => navigate(-1)}
+          className="flex items-center gap-2 text-bloom-text-secondary hover:text-bloom-text transition-colors"
+        >
+          <ChevronLeft size={20} />
+          <span className="font-medium">Back</span>
+        </button>
+
+        <button
+          onClick={toggleLibrary}
+          disabled={isSaving}
+          className={`flex items-center gap-2 px-3 py-1.5 rounded-xl transition-all text-sm font-medium ${
+            isSaved
+              ? 'bg-bloom-orange/10 text-bloom-orange hover:bg-bloom-orange/20'
+              : 'bg-slate-100 text-bloom-text-secondary hover:bg-slate-200 hover:text-bloom-text'
+          }`}
+        >
+          {isSaved ? (
+            <>
+              <BookmarkCheck size={15} />
+              Saved
+            </>
+          ) : (
+            <>
+              <Bookmark size={15} />
+              Save
+            </>
+          )}
+        </button>
+      </div>
       
       {/* Course Header */}
       <div 

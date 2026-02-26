@@ -165,6 +165,33 @@ export interface TagInfo {
   count: number
 }
 
+export interface LibraryItem {
+  id: string
+  type: 'lesson' | 'course'
+  // Course fields
+  courseId?: string
+  courseTitle?: string
+  courseDescription?: string
+  courseThemeColor?: string
+  courseLessonCount?: number
+  // Lesson fields
+  lessonId?: string
+  lessonTitle?: string
+  lessonDescription?: string
+  lessonThemeColor?: string
+  lessonPageCount?: number
+  lessonAuthorName?: string
+  lessonTags?: string[]
+  // Progress
+  progressPercent: number
+  completedCount: number
+  totalCount: number
+  isCompleted: boolean
+  // Metadata
+  savedAt: string
+  lastActivityAt?: string
+}
+
 export interface EditSuggestion {
   id: string
   lessonId: string
@@ -653,6 +680,36 @@ class ApiClient {
       method: 'POST',
       body: JSON.stringify({ rating }),
     })
+  }
+
+  // ── Library ──
+
+  async getLibrary() {
+    return this.request<{ items: LibraryItem[] }>('/library')
+  }
+
+  async addCourseToLibrary(courseId: string) {
+    return this.request<{ saved: boolean }>(`/library/course/${courseId}`, { method: 'POST' })
+  }
+
+  async removeCourseFromLibrary(courseId: string) {
+    return this.request<{ removed: boolean }>(`/library/course/${courseId}`, { method: 'DELETE' })
+  }
+
+  async checkCourseInLibrary(courseId: string) {
+    return this.request<{ saved: boolean }>(`/library/course/${courseId}/check`)
+  }
+
+  async addLessonToLibrary(lessonId: string) {
+    return this.request<{ saved: boolean }>(`/library/lesson/${lessonId}`, { method: 'POST' })
+  }
+
+  async removeLessonFromLibrary(lessonId: string) {
+    return this.request<{ removed: boolean }>(`/library/lesson/${lessonId}`, { method: 'DELETE' })
+  }
+
+  async checkLessonInLibrary(lessonId: string) {
+    return this.request<{ saved: boolean }>(`/library/lesson/${lessonId}/check`)
   }
 
 }
