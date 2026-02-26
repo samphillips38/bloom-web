@@ -257,6 +257,23 @@ export interface GeneratedLesson {
   modules: GeneratedModule[]
 }
 
+export type GenerationStatus = 'pending' | 'planning' | 'generating' | 'completed' | 'failed'
+export type GenerationSourceType = 'topic' | 'url' | 'pdf'
+
+export interface GenerationJob {
+  id: string
+  lessonId: string
+  userId: string
+  status: GenerationStatus
+  totalModules: number
+  completedModules: number
+  currentModuleTitle: string | null
+  sourceType: GenerationSourceType
+  error: string | null
+  createdAt: string
+  updatedAt: string
+}
+
 
 interface AuthTokens {
   user: User
@@ -680,6 +697,33 @@ class ApiClient {
       method: 'POST',
       body: JSON.stringify({ rating }),
     })
+  }
+
+  // ── Async AI Generation ──
+
+  /**
+   * Start a background AI generation job.
+   * Returns immediately with { lessonId, jobId }.
+   */
+  async startAIGeneration(data: {
+    topic: string
+    moduleCount?: number
+    sourceType?: GenerationSourceType
+    /** For 'url': the URL string. For 'pdf': base64 PDF data. For 'topic': omit. */
+    sourceContent?: string
+    lessonId?: string
+  }) {
+    return this.request<{ lessonId: string; jobId: string }>('/workshop/ai-generate', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+  }
+
+  /**
+   * Poll the status of a generation job for a lesson.
+   */
+  async getGenerationStatus(lessonId: string) {
+    return this.request<{ job: GenerationJob | null }>(`/workshop/lessons/${lessonId}/generation-status`)
   }
 
   // ── Library ──
