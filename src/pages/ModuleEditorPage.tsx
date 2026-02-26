@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, Save, Eye, Trash2, Plus, GripVertical, ChevronDown, ChevronUp,
   Type, Image, HelpCircle, Lightbulb, List, Calculator, Minus, Space,
-  X, Loader2, Check, ChevronRight, ChevronLeft, BookOpen,
+  X, Loader2, Check, ChevronRight, ChevronLeft, BookOpen, Zap,
 } from 'lucide-react'
 import {
   api, ContentData,
@@ -13,6 +13,7 @@ import Card from '../components/Card'
 import Button from '../components/Button'
 import RichContentRenderer, { RichText } from '../components/RichContentRenderer'
 import ProgressBar from '../components/ProgressBar'
+import InteractiveBlockEditor from '../components/workshop/InteractiveBlockEditor'
 
 // ═══════════════════════════════════════════════════════
 //  Types
@@ -489,22 +490,27 @@ function PageBlocksEditor({
       {/* Add block inline */}
       <div className="flex flex-wrap gap-2">
         {[
-          { type: 'heading', label: 'H', icon: Type },
-          { type: 'paragraph', label: 'P', icon: Type },
-          { type: 'image', label: '🖼', icon: Image },
-          { type: 'callout', label: '💡', icon: Lightbulb },
-          { type: 'bulletList', label: '•', icon: List },
-          { type: 'math', label: '∑', icon: Calculator },
-          { type: 'divider', label: '—', icon: Minus },
-          { type: 'spacer', label: '↕', icon: Space },
+          { type: 'heading', label: 'heading', icon: Type },
+          { type: 'paragraph', label: 'paragraph', icon: Type },
+          { type: 'image', label: 'image', icon: Image },
+          { type: 'callout', label: 'callout', icon: Lightbulb },
+          { type: 'bulletList', label: 'list', icon: List },
+          { type: 'math', label: 'math', icon: Calculator },
+          { type: 'divider', label: 'divider', icon: Minus },
+          { type: 'spacer', label: 'spacer', icon: Space },
+          { type: 'interactive', label: 'interactive', icon: Zap },
         ].map(item => (
           <button
             key={item.type}
             onClick={() => addBlock(createEmptyBlock(item.type as ContentBlock['type']))}
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-xs font-medium text-bloom-text-secondary transition-colors"
+            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+              item.type === 'interactive'
+                ? 'bg-violet-100 hover:bg-violet-200 text-violet-700'
+                : 'bg-slate-100 hover:bg-slate-200 text-bloom-text-secondary'
+            }`}
           >
             <item.icon size={12} />
-            {item.type}
+            {item.label}
           </button>
         ))}
       </div>
@@ -664,6 +670,14 @@ function BlockEditor({
         <div className="text-xs text-slate-400 text-center py-1">
           {block.type === 'divider' ? '— Horizontal Divider —' : `Spacer (${(block as any).size || 'md'})`}
         </div>
+      )}
+
+      {block.type === 'interactive' && (
+        <InteractiveBlockEditor
+          componentId={block.componentId}
+          props={block.props}
+          onUpdate={(componentId, props) => onUpdate({ ...block, componentId, props })}
+        />
       )}
     </div>
   )

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Sparkles, Lock, Globe, ChevronRight, Hammer, Bot, UserCheck } from 'lucide-react'
+import { Plus, Sparkles, Lock, Globe, ChevronRight, Hammer, Bot, UserCheck, Trash2, Loader2 } from 'lucide-react'
 import { api, LessonSummary } from '../lib/api'
 import Card from '../components/Card'
 
@@ -9,10 +9,25 @@ export default function WorkshopPage() {
   const [myLessons, setMyLessons] = useState<LessonSummary[]>([])
   const [publicLessons, setPublicLessons] = useState<LessonSummary[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
 
   useEffect(() => {
     loadData()
   }, [])
+
+  async function handleDeleteLesson(id: string) {
+    setDeletingId(id)
+    try {
+      await api.deleteLesson(id)
+      setMyLessons(prev => prev.filter(l => l.id !== id))
+    } catch (error) {
+      console.error('Failed to delete lesson:', error)
+    } finally {
+      setDeletingId(null)
+      setConfirmDeleteId(null)
+    }
+  }
 
   async function loadData() {
     try {
@@ -85,6 +100,11 @@ export default function WorkshopPage() {
                 lesson={lesson}
                 showStatus
                 onClick={() => navigate(`/workshop/edit/${lesson.id}`)}
+                onDelete={() => setConfirmDeleteId(lesson.id)}
+                isDeleting={deletingId === lesson.id}
+                confirmingDelete={confirmDeleteId === lesson.id}
+                onCancelDelete={() => setConfirmDeleteId(null)}
+                onConfirmDelete={() => handleDeleteLesson(lesson.id)}
               />
             ))}
           </div>
@@ -137,49 +157,97 @@ function LessonCard({
   showStatus,
   showAuthor,
   onClick,
+  onDelete,
+  isDeleting,
+  confirmingDelete,
+  onCancelDelete,
+  onConfirmDelete,
 }: {
   lesson: LessonSummary
   showStatus?: boolean
   showAuthor?: boolean
   onClick: () => void
+  onDelete?: () => void
+  isDeleting?: boolean
+  confirmingDelete?: boolean
+  onCancelDelete?: () => void
+  onConfirmDelete?: () => void
 }) {
   const themeColor = lesson.themeColor || '#FF6B35'
 
   return (
     <Card
-      className="cursor-pointer hover:shadow-bloom-lg transition-all duration-200 hover:scale-[1.01]"
-      onClick={onClick}
+      className="transition-all duration-200 hover:shadow-bloom-lg"
     >
-      <div className="flex items-start gap-3">
-        <div
-          className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
-          style={{ backgroundColor: `${themeColor}15` }}
-        >
-          <Hammer size={22} style={{ color: themeColor }} />
-        </div>
-        <div className="flex-1 min-w-0">
-          <h3 className="font-semibold text-bloom-text truncate">{lesson.title}</h3>
-          {lesson.description && (
-            <p className="text-sm text-bloom-text-secondary line-clamp-2 mt-0.5">{lesson.description}</p>
-          )}
-          <div className="flex items-center gap-3 mt-2 flex-wrap">
-            {showStatus && (
-              <StatusBadge status={lesson.status} />
-            )}
-            {showAuthor && (
-              <span className="text-xs text-bloom-text-muted">By {lesson.authorName}</span>
-            )}
-            <span className="text-xs text-bloom-text-muted">{lesson.pageCount} pages</span>
-            <AIBadge involvement={lesson.aiInvolvement} size="sm" />
-            {lesson.visibility === 'private' ? (
-              <Lock size={12} className="text-bloom-text-muted" />
-            ) : (
-              <Globe size={12} className="text-bloom-text-muted" />
-            )}
+      {confirmingDelete ? (
+        // Inline delete confirmation
+        <div className="flex items-center gap-3">
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-bloom-text truncate">Delete "{lesson.title}"?</p>
+            <p className="text-xs text-bloom-text-muted mt-0.5">This cannot be undone.</p>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <button
+              onClick={onCancelDelete}
+              disabled={isDeleting}
+              className="px-3 py-1.5 rounded-lg border border-slate-200 text-sm text-bloom-text font-medium hover:bg-slate-50 transition-colors disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={onConfirmDelete}
+              disabled={isDeleting}
+              className="px-3 py-1.5 rounded-lg bg-red-500 text-white text-sm font-semibold hover:bg-red-600 transition-colors disabled:opacity-50 flex items-center gap-1.5"
+            >
+              {isDeleting ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+              Delete
+            </button>
           </div>
         </div>
-        <ChevronRight size={18} className="text-bloom-text-muted flex-shrink-0 mt-1" />
-      </div>
+      ) : (
+        <div className="flex items-start gap-3">
+          <div
+            className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 cursor-pointer"
+            style={{ backgroundColor: `${themeColor}15` }}
+            onClick={onClick}
+          >
+            <Hammer size={22} style={{ color: themeColor }} />
+          </div>
+          <div className="flex-1 min-w-0 cursor-pointer" onClick={onClick}>
+            <h3 className="font-semibold text-bloom-text truncate">{lesson.title}</h3>
+            {lesson.description && (
+              <p className="text-sm text-bloom-text-secondary line-clamp-2 mt-0.5">{lesson.description}</p>
+            )}
+            <div className="flex items-center gap-3 mt-2 flex-wrap">
+              {showStatus && (
+                <StatusBadge status={lesson.status} />
+              )}
+              {showAuthor && (
+                <span className="text-xs text-bloom-text-muted">By {lesson.authorName}</span>
+              )}
+              <span className="text-xs text-bloom-text-muted">{lesson.pageCount} pages</span>
+              <AIBadge involvement={lesson.aiInvolvement} size="sm" />
+              {lesson.visibility === 'private' ? (
+                <Lock size={12} className="text-bloom-text-muted" />
+              ) : (
+                <Globe size={12} className="text-bloom-text-muted" />
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-1 flex-shrink-0 mt-0.5">
+            {onDelete && (
+              <button
+                onClick={e => { e.stopPropagation(); onDelete() }}
+                className="p-1.5 hover:bg-red-50 rounded-lg transition-colors"
+                title="Delete lesson"
+              >
+                <Trash2 size={16} className="text-red-400" />
+              </button>
+            )}
+            <ChevronRight size={18} className="text-bloom-text-muted cursor-pointer" onClick={onClick} />
+          </div>
+        </div>
+      )}
     </Card>
   )
 }
