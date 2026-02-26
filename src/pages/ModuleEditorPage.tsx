@@ -14,6 +14,7 @@ import Button from '../components/Button'
 import RichContentRenderer, { RichText } from '../components/RichContentRenderer'
 import ProgressBar from '../components/ProgressBar'
 import InteractiveBlockEditor from '../components/workshop/InteractiveBlockEditor'
+import DiagramPickerModal from '../components/workshop/DiagramPickerModal'
 
 // ═══════════════════════════════════════════════════════
 //  Types
@@ -474,6 +475,10 @@ function PageBlocksEditor({
     onUpdate(newBlocks)
   }
 
+  function handleAddSource(source: SourceReference) {
+    onUpdateSources([...sources, source])
+  }
+
   return (
     <div className="space-y-3">
       {blocks.map((block, i) => (
@@ -484,6 +489,7 @@ function PageBlocksEditor({
           onRemove={() => removeBlock(i)}
           onMoveUp={i > 0 ? () => moveBlock(i, 'up') : undefined}
           onMoveDown={i < blocks.length - 1 ? () => moveBlock(i, 'down') : undefined}
+          onAddSource={handleAddSource}
         />
       ))}
 
@@ -533,13 +539,16 @@ function BlockEditor({
   onRemove,
   onMoveUp,
   onMoveDown,
+  onAddSource,
 }: {
   block: ContentBlock
   onUpdate: (block: ContentBlock) => void
   onRemove: () => void
   onMoveUp?: () => void
   onMoveDown?: () => void
+  onAddSource?: (source: SourceReference) => void
 }) {
+  const [showDiagramPicker, setShowDiagramPicker] = useState(false)
   const blockLabel = block.type.charAt(0).toUpperCase() + block.type.slice(1)
 
   return (
@@ -594,13 +603,23 @@ function BlockEditor({
 
       {block.type === 'image' && (
         <div className="space-y-2">
-          <input
-            type="text"
-            value={block.src}
-            onChange={(e) => onUpdate({ ...block, src: e.target.value })}
-            placeholder="Image URL or emoji:🎯"
-            className="w-full text-sm border rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-bloom-orange/30"
-          />
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={block.src}
+              onChange={(e) => onUpdate({ ...block, src: e.target.value })}
+              placeholder="Image URL or emoji:🎯"
+              className="flex-1 text-sm border rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-bloom-orange/30 min-w-0"
+            />
+            <button
+              onClick={() => setShowDiagramPicker(true)}
+              title="Browse diagrams from Wikimedia Commons"
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors flex-shrink-0"
+            >
+              <Image size={13} />
+              Browse
+            </button>
+          </div>
           <input
             type="text"
             value={block.caption || ''}
@@ -608,6 +627,18 @@ function BlockEditor({
             placeholder="Caption (optional)"
             className="w-full text-sm border rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-bloom-orange/30"
           />
+
+          {showDiagramPicker && (
+            <DiagramPickerModal
+              initialSearch={block.alt || ''}
+              onSelect={(imageUrl, altText, attributionUrl) => {
+                onUpdate({ ...block, src: imageUrl, alt: altText })
+                onAddSource?.({ title: altText, url: attributionUrl, description: 'Via Wikimedia Commons' })
+                setShowDiagramPicker(false)
+              }}
+              onClose={() => setShowDiagramPicker(false)}
+            />
+          )}
         </div>
       )}
 
