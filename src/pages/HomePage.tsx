@@ -396,7 +396,6 @@ export default function HomePage() {
 
   // Streak & energy from auth context
   const streak = stats?.streak?.currentStreak ?? 0
-  const energy = stats?.energy ?? 5
 
   if (isLoading) {
     return (
