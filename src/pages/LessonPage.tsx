@@ -256,8 +256,8 @@ export default function LessonPage() {
     setWordArrangeSelected([])
     setWordArrangeRemaining([])
 
-    // Save progress (fire-and-forget)
-    api.savePage(lessonId!, nextIndex).catch(() => {})
+    // Save progress (fire-and-forget — but surface errors so they're visible)
+    api.savePage(lessonId!, nextIndex).catch(err => console.warn('savePage failed:', err))
 
     if (containerRef.current) containerRef.current.scrollTop = 0
 
