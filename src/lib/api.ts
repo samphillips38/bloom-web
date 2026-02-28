@@ -9,6 +9,19 @@ export interface User {
   avatarUrl?: string
   energy: number
   isPremium: boolean
+  stripeCustomerId?: string | null
+}
+
+export type SubscriptionPlan = 'monthly' | 'yearly'
+
+export interface SubscriptionStatus {
+  isPremium: boolean
+  plan: SubscriptionPlan | null
+  status: string | null
+  currentPeriodEnd: string | null
+  cancelAtPeriodEnd: boolean
+  trialEnd: string | null
+  grantedBy: 'stripe' | 'admin' | null
 }
 
 export interface Achievement {
@@ -371,7 +384,7 @@ class ApiClient {
     return !!this.accessToken
   }
 
-  private getHeaders(body?: BodyInit | null): HeadersInit {
+  private getHeaders(body?: BodyInit | null, extraHeaders?: Record<string, string>): HeadersInit {
     const headers: Record<string, string> = {}
     // Let the browser set Content-Type automatically for FormData (multipart boundary)
     if (!(body instanceof FormData)) {
@@ -380,15 +393,23 @@ class ApiClient {
     if (this.accessToken) {
       headers['Authorization'] = `Bearer ${this.accessToken}`
     }
+    if (extraHeaders) {
+      Object.assign(headers, extraHeaders)
+    }
     return headers
   }
 
   // ── Core Request with Auto-Refresh ──
 
-  private async request<T>(endpoint: string, options?: RequestInit, isRetry = false): Promise<T> {
+  private async request<T>(
+    endpoint: string,
+    options?: RequestInit,
+    isRetry = false,
+    extraHeaders?: Record<string, string>,
+  ): Promise<T> {
     const res = await fetch(`${API_BASE}${endpoint}`, {
       ...options,
-      headers: this.getHeaders(options?.body),
+      headers: this.getHeaders(options?.body, extraHeaders),
       credentials: 'include', // send cookies for refresh token
     })
 
@@ -396,7 +417,7 @@ class ApiClient {
     if (res.status === 401 && !isRetry && this.refreshToken) {
       const refreshed = await this.tryRefresh()
       if (refreshed) {
-        return this.request<T>(endpoint, options, true)
+        return this.request<T>(endpoint, options, true, extraHeaders)
       }
     }
 
@@ -877,6 +898,53 @@ class ApiClient {
 
   async checkLessonInLibrary(lessonId: string) {
     return this.request<{ saved: boolean }>(`/library/lesson/${lessonId}/check`)
+  }
+
+  // ── Subscription / Premium ──
+
+  async getSubscriptionStatus() {
+    return this.request<{ status: SubscriptionStatus }>('/subscription/status')
+  }
+
+  async createCheckoutSession(plan: SubscriptionPlan) {
+    return this.request<{ url: string }>('/subscription/checkout', {
+      method: 'POST',
+      body: JSON.stringify({ plan }),
+    })
+  }
+
+  async createPortalSession() {
+    return this.request<{ url: string }>('/subscription/portal', {
+      method: 'POST',
+    })
+  }
+
+  /**
+   * Admin: Grant premium access to a user.
+   * Requires the ADMIN_SECRET to be passed as adminKey.
+   */
+  async adminGrantPremium(userId: string, adminKey: string, note?: string, expiresAt?: string) {
+    return this.request<{ message: string }>(
+      '/subscription/admin/grant',
+      {
+        method: 'POST',
+        body: JSON.stringify({ userId, note, expiresAt }),
+      },
+      false,
+      { 'X-Admin-Key': adminKey },
+    )
+  }
+
+  async adminRevokePremium(userId: string, adminKey: string) {
+    return this.request<{ message: string }>(
+      '/subscription/admin/revoke',
+      {
+        method: 'POST',
+        body: JSON.stringify({ userId }),
+      },
+      false,
+      { 'X-Admin-Key': adminKey },
+    )
   }
 
 }
