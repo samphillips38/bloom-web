@@ -11,11 +11,49 @@ export interface User {
   isPremium: boolean
 }
 
+export interface Achievement {
+  id: string
+  title: string
+  description: string
+  emoji: string
+  xpBonus: number
+  earnedAt: string
+}
+
 export interface UserStats {
-  streak: { currentStreak: number; longestStreak: number } | null
+  streak: {
+    currentStreak: number
+    longestStreak: number
+    lastActivityDate: string | null
+    streakFreezeUsedDate: string | null
+  } | null
   energy: number
+  energyMax: number
+  msUntilNextEnergyRefill: number
+  streakFreezes: number
   completedLessons: number
   totalScore: number
+  xp: number
+  level: number
+  xpForCurrentLevel: number
+  xpForNextLevel: number
+  dailyGoal: number
+  dailyProgress: number
+  achievements: Achievement[]
+}
+
+export interface LessonCompleteResult {
+  progress: UserProgress
+  xpEarned: number
+  xpBonusFromAchievements: number
+  newXp: number
+  oldLevel: number
+  newLevel: number
+  leveledUp: boolean
+  newStreak: number
+  streakMilestone: number | null
+  newAchievements: Omit<Achievement, 'earnedAt'>[]
+  usedStreakFreeze: boolean
 }
 
 export interface Category {
@@ -500,10 +538,34 @@ class ApiClient {
   }
 
   async updateProgress(lessonId: string, completed: boolean, score?: number, lastPageIndex?: number) {
-    return this.request<{ progress: UserProgress }>('/progress/update', {
+    // When completing a lesson the server returns a LessonCompleteResult;
+    // for plain saves it returns { progress }. Cast broadly and let callers inspect.
+    return this.request<LessonCompleteResult | { progress: UserProgress }>('/progress/update', {
       method: 'POST',
       body: JSON.stringify({ lessonId, completed, score, lastPageIndex }),
     })
+  }
+
+  async setDailyGoal(goal: number) {
+    return this.request<{ goal: number }>('/progress/daily-goal', {
+      method: 'POST',
+      body: JSON.stringify({ goal }),
+    })
+  }
+
+  async getAchievements() {
+    return this.request<{ achievements: Achievement[]; all: Omit<Achievement, 'earnedAt'>[] }>('/progress/achievements')
+  }
+
+  async addStreakFreeze(count = 1) {
+    return this.request<{ streakFreezes: number }>('/progress/streak-freeze/add', {
+      method: 'POST',
+      body: JSON.stringify({ count }),
+    })
+  }
+
+  async restoreEnergy() {
+    return this.request<{ energy: number }>('/progress/energy/restore', { method: 'POST' })
   }
 
   async savePage(lessonId: string, pageIndex: number) {

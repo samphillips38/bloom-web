@@ -12,6 +12,7 @@ interface AuthContextType {
   appleLogin: (idToken: string, user?: { name?: { firstName?: string; lastName?: string } }) => Promise<void>
   logout: () => void
   refreshStats: () => Promise<void>
+  setDailyGoal: (goal: number) => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -42,7 +43,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const profileRes = await api.getProfile()
       setUser(profileRes.user)
-      
+
       try {
         const statsRes = await api.getUserStats()
         setStats(statsRes)
@@ -50,7 +51,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // Stats might fail if no progress yet
       }
     } catch {
-      // Token is invalid or expired and couldn't be refreshed
       api.clearTokens()
     } finally {
       setIsLoading(false)
@@ -77,7 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function handleAppleLogin(
     idToken: string,
-    appleUser?: { name?: { firstName?: string; lastName?: string } }
+    appleUser?: { name?: { firstName?: string; lastName?: string } },
   ) {
     const res = await api.appleLogin(idToken, appleUser)
     setUser(res.user)
@@ -90,19 +90,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setStats(null)
   }
 
+  async function handleSetDailyGoal(goal: number) {
+    await api.setDailyGoal(goal)
+    await refreshStats()
+  }
+
   return (
-    <AuthContext.Provider value={{
-      user,
-      stats,
-      isAuthenticated: !!user,
-      isLoading,
-      login,
-      register,
-      googleLogin: handleGoogleLogin,
-      appleLogin: handleAppleLogin,
-      logout,
-      refreshStats,
-    }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        stats,
+        isAuthenticated: !!user,
+        isLoading,
+        login,
+        register,
+        googleLogin: handleGoogleLogin,
+        appleLogin: handleAppleLogin,
+        logout,
+        refreshStats,
+        setDailyGoal: handleSetDailyGoal,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   )

@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Brain,
-  BookOpen,
   Compass,
   ChevronRight,
   Bookmark,
@@ -11,6 +10,9 @@ import {
   Trophy,
   ArrowRight,
   Check,
+  Flame,
+  Zap,
+  Star,
 } from 'lucide-react'
 import { api, LibraryItem } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
@@ -353,6 +355,79 @@ function EmptyLibrary({ navigate }: { navigate: ReturnType<typeof useNavigate> }
 }
 
 // ─────────────────────────────────────────────────────────────
+//  Daily Goal Card
+// ─────────────────────────────────────────────────────────────
+
+function DailyGoalCard({
+  goal, progress, pct, goalMet, onBrowse,
+}: {
+  goal: number; progress: number; pct: number; goalMet: boolean; onBrowse: () => void
+}) {
+  const radius = 28
+  const circumference = 2 * Math.PI * radius
+  const offset = circumference - (pct / 100) * circumference
+
+  return (
+    <Card className="p-4">
+      <div className="flex items-center gap-4">
+        {/* Ring */}
+        <div className="relative flex-shrink-0">
+          <svg width={72} height={72} className="-rotate-90">
+            <circle cx={36} cy={36} r={radius} fill="none" stroke="#FEF3C7" strokeWidth={6} />
+            <circle
+              cx={36} cy={36} r={radius} fill="none"
+              stroke={goalMet ? '#10B981' : '#F59E0B'}
+              strokeWidth={6}
+              strokeDasharray={circumference}
+              strokeDashoffset={offset}
+              strokeLinecap="round"
+              style={{ transition: 'stroke-dashoffset 0.7s ease' }}
+            />
+          </svg>
+          <div className="absolute inset-0 flex items-center justify-center">
+            {goalMet ? (
+              <span className="text-xl">✅</span>
+            ) : (
+              <Zap size={20} className="text-amber-500" />
+            )}
+          </div>
+        </div>
+
+        {/* Info */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between mb-0.5">
+            <p className="text-sm font-bold text-bloom-text">
+              {goalMet ? 'Daily goal complete! 🎉' : 'Daily goal'}
+            </p>
+            <span className="text-sm font-bold text-amber-600">{progress}/{goal}</span>
+          </div>
+          <div className="h-2 rounded-full bg-amber-100 overflow-hidden mb-1.5">
+            <div
+              className={`h-full rounded-full transition-all duration-700 ${goalMet ? 'bg-emerald-400' : 'bg-gradient-to-r from-amber-400 to-orange-400'}`}
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          <p className="text-xs text-bloom-text-secondary">
+            {goalMet
+              ? 'You\'ve earned your XP for today — keep going for bonus!'
+              : `${goal - progress} more lesson${goal - progress === 1 ? '' : 's'} to reach your daily goal`}
+          </p>
+        </div>
+
+        {!goalMet && (
+          <button
+            onClick={onBrowse}
+            className="flex-shrink-0 flex items-center justify-center w-9 h-9 rounded-xl bg-bloom-orange text-white hover:opacity-90 transition-opacity active:scale-95"
+          >
+            <ArrowRight size={16} />
+          </button>
+        )}
+      </div>
+    </Card>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────
 //  Main Page
 // ─────────────────────────────────────────────────────────────
 
@@ -394,8 +469,19 @@ export default function HomePage() {
   const currentItem = getCurrentItem(library)
   const otherItems = library.filter((i) => i.id !== currentItem?.id)
 
-  // Streak & energy from auth context
+  // Gamification stats from auth context
   const streak = stats?.streak?.currentStreak ?? 0
+  const dailyGoal = stats?.dailyGoal ?? 1
+  const dailyProgress = stats?.dailyProgress ?? 0
+  const dailyPct = Math.min(100, Math.round((dailyProgress / dailyGoal) * 100))
+  const goalMet = dailyProgress >= dailyGoal
+  const xp = stats?.xp ?? 0
+  const level = stats?.level ?? 1
+
+  // Detect "streak at risk" — user has a streak but hasn't completed anything today
+  const todayStr = new Date().toISOString().split('T')[0]
+  const lastActivity = stats?.streak?.lastActivityDate
+  const streakAtRisk = streak > 0 && lastActivity !== todayStr
 
   if (isLoading) {
     return (
@@ -406,38 +492,53 @@ export default function HomePage() {
   }
 
   return (
-    <div className="space-y-6 animate-fade-in pb-2">
+    <div className="space-y-5 animate-fade-in pb-2">
 
-      {/* ── Greeting ── */}
+      {/* ── Greeting + Level pill ── */}
       <div className="flex items-start justify-between pt-1">
         <div>
           <h1 className="text-2xl font-bold text-bloom-text leading-tight">
             {getGreeting(user?.name)}
           </h1>
-          {streak > 0 && (
+          {streak > 0 ? (
+            <p className="text-sm text-bloom-text-secondary mt-0.5 flex items-center gap-1">
+              <Flame size={13} className="text-orange-500" fill="currentColor" />
+              {streak}-day streak
+            </p>
+          ) : (
             <p className="text-sm text-bloom-text-secondary mt-0.5">
-              {streak} day streak — keep it going! 🔥
+              Start a lesson to begin your streak 🔥
             </p>
           )}
         </div>
-
-        {/* Quick stats pill */}
-        <div className="flex items-center gap-2 bg-white rounded-2xl px-3 py-2 shadow-sm border border-gray-100">
-          <div className="flex items-center gap-1">
-            <Trophy size={14} className="text-amber-500" />
-            <span className="text-xs font-bold text-bloom-text">
-              {stats?.completedLessons ?? 0}
-            </span>
-          </div>
-          <div className="w-px h-3 bg-gray-200" />
-          <div className="flex items-center gap-1">
-            <BookOpen size={14} className="text-blue-400" />
-            <span className="text-xs font-bold text-bloom-text">
-              {library.length}
-            </span>
-          </div>
+        <div className="flex items-center gap-1.5 bg-gradient-to-r from-amber-400/10 to-orange-400/10 border border-amber-200 rounded-2xl px-3 py-2">
+          <Star size={14} className="text-amber-500" fill="currentColor" />
+          <span className="text-sm font-bold text-amber-700">Lv.{level}</span>
+          <span className="text-xs text-amber-500 font-medium">{xp.toLocaleString()} XP</span>
         </div>
       </div>
+
+      {/* ── Streak at-risk warning ── */}
+      {streakAtRisk && (
+        <div className="flex items-center gap-3 bg-orange-50 border border-orange-200 rounded-2xl px-4 py-3">
+          <div className="text-2xl">⚠️</div>
+          <div className="flex-1">
+            <p className="text-sm font-bold text-orange-700">Streak at risk!</p>
+            <p className="text-xs text-orange-600 mt-0.5">
+              Complete a lesson today to keep your {streak}-day streak alive.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* ── Daily Goal Ring ── */}
+      <DailyGoalCard
+        goal={dailyGoal}
+        progress={dailyProgress}
+        pct={dailyPct}
+        goalMet={goalMet}
+        onBrowse={() => navigate('/courses')}
+      />
 
       {/* ── Currently Learning Hero ── */}
       {currentItem ? (

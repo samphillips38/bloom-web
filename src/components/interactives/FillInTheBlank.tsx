@@ -122,9 +122,9 @@ export default function FillInTheBlank({
       <div>
         <p className="text-xs font-semibold text-violet-600 mb-2">Word Bank</p>
         <div className="flex flex-wrap gap-2">
-          {bank.map(word => (
+          {bank.map((word, i) => (
             <button
-              key={word}
+              key={`${word}-${i}`}
               onClick={() => handleWordSelect(word)}
               className={`px-3 py-1.5 rounded-lg border-2 text-xs font-medium transition-all duration-150
                 ${selected === word

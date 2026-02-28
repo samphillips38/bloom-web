@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
-import { X, Zap, Check, Lightbulb, ChevronRight, ChevronDown, ChevronUp, ChevronLeft, Sparkles, Info, BookOpen, ArrowRight, Trophy, RotateCcw, CornerDownLeft } from 'lucide-react'
-import { api, LessonWithContent, LessonContent, LessonModule, ContentData, LessonStub } from '../lib/api'
+import { X, Zap, Check, Lightbulb, ChevronRight, ChevronDown, ChevronUp, ChevronLeft, Sparkles, Info, BookOpen, ArrowRight, Trophy, RotateCcw, CornerDownLeft, Flame, Star } from 'lucide-react'
+import { api, LessonWithContent, LessonContent, LessonModule, ContentData, LessonStub, LessonCompleteResult } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import ProgressBar from '../components/ProgressBar'
 import RichContentRenderer, { RichText } from '../components/RichContentRenderer'
@@ -21,6 +21,7 @@ export default function LessonPage() {
   const [showExplanation, setShowExplanation] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [showCelebration, setShowCelebration] = useState(false)
+  const [completionResult, setCompletionResult] = useState<LessonCompleteResult | null>(null)
   const [showModuleComplete, setShowModuleComplete] = useState(false)
   const [completedModuleIndex, setCompletedModuleIndex] = useState(-1)
 
@@ -217,12 +218,16 @@ export default function LessonPage() {
     if (isLast) {
       setShowCelebration(true)
       try {
-        await api.updateProgress(lessonId!, true, 100, flatPages.length - 1)
+        const finalScore = quizTotal > 0 ? Math.round((quizCorrect / quizTotal) * 100) : 100
+        const result = await api.updateProgress(lessonId!, true, finalScore, flatPages.length - 1)
+        // Type-guard: full completion result has xpEarned
+        if ('xpEarned' in result) {
+          setCompletionResult(result as LessonCompleteResult)
+        }
         await refreshStats()
       } catch (err) {
         console.error('Failed to save progress:', err)
       }
-      setTimeout(() => navigate(-1), 1800)
       return
     }
 
@@ -879,32 +884,129 @@ export default function LessonPage() {
   if (showCelebration) {
     const nextLessons = lesson?.nextLessons || []
     const quizPercent = quizTotal > 0 ? Math.round((quizCorrect / quizTotal) * 100) : null
+    const cr = completionResult
 
     return (
       <div className="fixed inset-0 flex flex-col bg-gradient-to-br from-emerald-600 via-green-600 to-teal-600 overflow-hidden" style={{ height: '100dvh' }}>
-        <main className="flex-1 overflow-y-auto px-6 flex flex-col items-center justify-center">
-          <div className="text-center animate-bounce-in max-w-md w-full py-8">
-          <div className="w-24 h-24 rounded-full bg-white/20 flex items-center justify-center mx-auto mb-6">
-            <Sparkles size={48} className="text-white" />
-          </div>
-          <h1 className="text-4xl font-bold text-white mb-2">Lesson Complete!</h1>
-            <p className="text-white/80 text-lg mb-6">Great job learning something new</p>
+        <main className="flex-1 overflow-y-auto px-5 py-8 flex flex-col items-center">
+          <div className="max-w-md w-full space-y-4">
 
-            {quizPercent !== null && (
-              <div className="bg-white/15 backdrop-blur-md rounded-2xl p-5 mb-6 border border-white/20">
-                <div className="flex items-center gap-3 mb-2">
-                  <Trophy size={22} className="text-amber-300" />
-                  <span className="text-white font-semibold">Quiz Score</span>
-        </div>
-                <p className="text-5xl font-black text-white">{quizPercent}<span className="text-2xl font-bold text-white/60">%</span></p>
-                <p className="text-white/70 text-sm mt-1">{quizCorrect} / {quizTotal} correct</p>
+            {/* ── Header ── */}
+            <div className="text-center animate-bounce-in">
+              <div className="w-20 h-20 rounded-full bg-white/20 flex items-center justify-center mx-auto mb-4">
+                <Sparkles size={40} className="text-white" />
+              </div>
+              <h1 className="text-4xl font-bold text-white mb-1">Lesson Complete!</h1>
+              <p className="text-white/80 text-base">
+                {quizPercent !== null
+                  ? quizPercent === 100
+                    ? '⭐ Perfect score!'
+                    : quizPercent >= 70
+                    ? 'Well done!'
+                    : 'Keep practising!'
+                  : 'Great job learning something new'}
+              </p>
+            </div>
+
+            {/* ── Stats row ── */}
+            <div className="grid grid-cols-3 gap-3">
+              {/* XP Earned */}
+              <div className="bg-white/15 backdrop-blur-md rounded-2xl p-4 border border-white/20 text-center">
+                <Star size={20} className="text-amber-300 mx-auto mb-1" fill="currentColor" />
+                <p className="text-2xl font-black text-white">
+                  +{cr ? cr.xpEarned + cr.xpBonusFromAchievements : 10}
+                </p>
+                <p className="text-white/60 text-xs">XP earned</p>
+              </div>
+              {/* Quiz score */}
+              <div className="bg-white/15 backdrop-blur-md rounded-2xl p-4 border border-white/20 text-center">
+                <Trophy size={20} className="text-amber-300 mx-auto mb-1" />
+                <p className="text-2xl font-black text-white">
+                  {quizPercent !== null ? `${quizPercent}%` : '—'}
+                </p>
+                <p className="text-white/60 text-xs">
+                  {quizPercent !== null ? `${quizCorrect}/${quizTotal} correct` : 'No quiz'}
+                </p>
+              </div>
+              {/* Streak */}
+              <div className="bg-white/15 backdrop-blur-md rounded-2xl p-4 border border-white/20 text-center">
+                <Flame size={20} className="text-orange-300 mx-auto mb-1" fill="currentColor" />
+                <p className="text-2xl font-black text-white">
+                  {cr?.newStreak ?? '—'}
+                </p>
+                <p className="text-white/60 text-xs">day streak</p>
+              </div>
+            </div>
+
+            {/* ── Level up banner ── */}
+            {cr?.leveledUp && (
+              <div className="bg-amber-400/90 backdrop-blur-md rounded-2xl p-4 border border-amber-300 flex items-center gap-3">
+                <div className="text-3xl">🎉</div>
+                <div>
+                  <p className="font-black text-amber-900">Level Up!</p>
+                  <p className="text-amber-800 text-sm">
+                    You reached <span className="font-bold">Level {cr.newLevel}</span>! Keep it up!
+                  </p>
+                </div>
               </div>
             )}
 
+            {/* ── Streak milestone ── */}
+            {cr?.streakMilestone && (
+              <div className="bg-orange-400/90 backdrop-blur-md rounded-2xl p-4 border border-orange-300 flex items-center gap-3">
+                <div className="text-3xl">🔥</div>
+                <div>
+                  <p className="font-black text-orange-900">{cr.streakMilestone}-Day Streak!</p>
+                  <p className="text-orange-800 text-sm">
+                    You're on fire! {cr.streakMilestone} days in a row!
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* ── Streak freeze used ── */}
+            {cr?.usedStreakFreeze && (
+              <div className="bg-indigo-400/80 backdrop-blur-md rounded-2xl p-4 border border-indigo-300 flex items-center gap-3">
+                <div className="text-3xl">🛡️</div>
+                <div>
+                  <p className="font-black text-white">Streak Freeze used</p>
+                  <p className="text-indigo-100 text-sm">
+                    Your streak was protected from yesterday's miss!
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* ── New achievements ── */}
+            {cr?.newAchievements && cr.newAchievements.length > 0 && (
+              <div className="bg-white/15 backdrop-blur-md rounded-2xl p-4 border border-white/20">
+                <p className="text-white/60 text-xs font-bold uppercase tracking-widest mb-3">
+                  🏆 New achievement{cr.newAchievements.length > 1 ? 's' : ''} unlocked!
+                </p>
+                <div className="space-y-2">
+                  {cr.newAchievements.map(a => (
+                    <div key={a.id} className="flex items-center gap-3">
+                      <span className="text-2xl">{a.emoji}</span>
+                      <div>
+                        <p className="text-white font-bold text-sm">{a.title}</p>
+                        <p className="text-white/60 text-xs">{a.description}</p>
+                      </div>
+                      {a.xpBonus > 0 && (
+                        <span className="ml-auto text-amber-300 text-xs font-bold">+{a.xpBonus} XP</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* ── What to learn next ── */}
             {nextLessons.length > 0 && (
-              <div className="mt-2">
-                <p className="text-white/60 text-xs font-bold uppercase tracking-widest mb-4 text-left">What to learn next</p>
-                <div className="space-y-3">
+              <div>
+                <p className="text-white/60 text-xs font-bold uppercase tracking-widest mb-3">
+                  What to learn next
+                </p>
+                <div className="space-y-2">
                   {nextLessons.map((next: LessonStub) => (
                     <button
                       key={next.id}
@@ -912,7 +1014,7 @@ export default function LessonPage() {
                       className="w-full flex items-center gap-3 p-4 rounded-2xl bg-white/15 hover:bg-white/25 border border-white/20 transition-all text-left"
                     >
                       <div
-                        className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 text-white font-bold"
+                        className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 text-white font-bold text-sm"
                         style={{ background: next.themeColor || '#FF6B35' }}
                       >
                         {next.title.charAt(0)}
@@ -929,6 +1031,14 @@ export default function LessonPage() {
                 </div>
               </div>
             )}
+
+            {/* ── Done button ── */}
+            <button
+              onClick={() => navigate(-1)}
+              className="w-full py-4 rounded-2xl bg-white/20 hover:bg-white/30 border border-white/30 text-white font-bold text-base transition-all active:scale-95"
+            >
+              Continue
+            </button>
           </div>
         </main>
       </div>
