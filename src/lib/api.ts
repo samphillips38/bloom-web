@@ -9,13 +9,64 @@ export interface User {
   avatarUrl?: string
   energy: number
   isPremium: boolean
+  stripeCustomerId?: string | null
+}
+
+export type SubscriptionPlan = 'monthly' | 'yearly'
+
+export interface SubscriptionStatus {
+  isPremium: boolean
+  plan: SubscriptionPlan | null
+  status: string | null
+  currentPeriodEnd: string | null
+  cancelAtPeriodEnd: boolean
+  trialEnd: string | null
+  grantedBy: 'stripe' | 'admin' | null
+}
+
+export interface Achievement {
+  id: string
+  title: string
+  description: string
+  emoji: string
+  xpBonus: number
+  earnedAt: string
 }
 
 export interface UserStats {
-  streak: { currentStreak: number; longestStreak: number } | null
+  streak: {
+    currentStreak: number
+    longestStreak: number
+    lastActivityDate: string | null
+    streakFreezeUsedDate: string | null
+  } | null
   energy: number
+  energyMax: number
+  msUntilNextEnergyRefill: number
+  streakFreezes: number
   completedLessons: number
   totalScore: number
+  xp: number
+  level: number
+  xpForCurrentLevel: number
+  xpForNextLevel: number
+  dailyGoal: number
+  dailyProgress: number
+  achievements: Achievement[]
+}
+
+export interface LessonCompleteResult {
+  progress: UserProgress
+  xpEarned: number
+  xpBonusFromAchievements: number
+  newXp: number
+  oldLevel: number
+  newLevel: number
+  leveledUp: boolean
+  newStreak: number
+  streakMilestone: number | null
+  newAchievements: Omit<Achievement, 'earnedAt'>[]
+  usedStreakFreeze: boolean
 }
 
 export interface Category {
@@ -333,7 +384,7 @@ class ApiClient {
     return !!this.accessToken
   }
 
-  private getHeaders(body?: BodyInit | null): HeadersInit {
+  private getHeaders(body?: BodyInit | null, extraHeaders?: Record<string, string>): HeadersInit {
     const headers: Record<string, string> = {}
     // Let the browser set Content-Type automatically for FormData (multipart boundary)
     if (!(body instanceof FormData)) {
@@ -342,15 +393,23 @@ class ApiClient {
     if (this.accessToken) {
       headers['Authorization'] = `Bearer ${this.accessToken}`
     }
+    if (extraHeaders) {
+      Object.assign(headers, extraHeaders)
+    }
     return headers
   }
 
   // ── Core Request with Auto-Refresh ──
 
-  private async request<T>(endpoint: string, options?: RequestInit, isRetry = false): Promise<T> {
+  private async request<T>(
+    endpoint: string,
+    options?: RequestInit,
+    isRetry = false,
+    extraHeaders?: Record<string, string>,
+  ): Promise<T> {
     const res = await fetch(`${API_BASE}${endpoint}`, {
       ...options,
-      headers: this.getHeaders(options?.body),
+      headers: this.getHeaders(options?.body, extraHeaders),
       credentials: 'include', // send cookies for refresh token
     })
 
@@ -358,7 +417,7 @@ class ApiClient {
     if (res.status === 401 && !isRetry && this.refreshToken) {
       const refreshed = await this.tryRefresh()
       if (refreshed) {
-        return this.request<T>(endpoint, options, true)
+        return this.request<T>(endpoint, options, true, extraHeaders)
       }
     }
 
@@ -500,10 +559,34 @@ class ApiClient {
   }
 
   async updateProgress(lessonId: string, completed: boolean, score?: number, lastPageIndex?: number) {
-    return this.request<{ progress: UserProgress }>('/progress/update', {
+    // When completing a lesson the server returns a LessonCompleteResult;
+    // for plain saves it returns { progress }. Cast broadly and let callers inspect.
+    return this.request<LessonCompleteResult | { progress: UserProgress }>('/progress/update', {
       method: 'POST',
       body: JSON.stringify({ lessonId, completed, score, lastPageIndex }),
     })
+  }
+
+  async setDailyGoal(goal: number) {
+    return this.request<{ goal: number }>('/progress/daily-goal', {
+      method: 'POST',
+      body: JSON.stringify({ goal }),
+    })
+  }
+
+  async getAchievements() {
+    return this.request<{ achievements: Achievement[]; all: Omit<Achievement, 'earnedAt'>[] }>('/progress/achievements')
+  }
+
+  async addStreakFreeze(count = 1) {
+    return this.request<{ streakFreezes: number }>('/progress/streak-freeze/add', {
+      method: 'POST',
+      body: JSON.stringify({ count }),
+    })
+  }
+
+  async restoreEnergy() {
+    return this.request<{ energy: number }>('/progress/energy/restore', { method: 'POST' })
   }
 
   async savePage(lessonId: string, pageIndex: number) {
@@ -815,6 +898,53 @@ class ApiClient {
 
   async checkLessonInLibrary(lessonId: string) {
     return this.request<{ saved: boolean }>(`/library/lesson/${lessonId}/check`)
+  }
+
+  // ── Subscription / Premium ──
+
+  async getSubscriptionStatus() {
+    return this.request<{ status: SubscriptionStatus }>('/subscription/status')
+  }
+
+  async createCheckoutSession(plan: SubscriptionPlan) {
+    return this.request<{ url: string }>('/subscription/checkout', {
+      method: 'POST',
+      body: JSON.stringify({ plan }),
+    })
+  }
+
+  async createPortalSession() {
+    return this.request<{ url: string }>('/subscription/portal', {
+      method: 'POST',
+    })
+  }
+
+  /**
+   * Admin: Grant premium access to a user.
+   * Requires the ADMIN_SECRET to be passed as adminKey.
+   */
+  async adminGrantPremium(userId: string, adminKey: string, note?: string, expiresAt?: string) {
+    return this.request<{ message: string }>(
+      '/subscription/admin/grant',
+      {
+        method: 'POST',
+        body: JSON.stringify({ userId, note, expiresAt }),
+      },
+      false,
+      { 'X-Admin-Key': adminKey },
+    )
+  }
+
+  async adminRevokePremium(userId: string, adminKey: string) {
+    return this.request<{ message: string }>(
+      '/subscription/admin/revoke',
+      {
+        method: 'POST',
+        body: JSON.stringify({ userId }),
+      },
+      false,
+      { 'X-Admin-Key': adminKey },
+    )
   }
 
 }
