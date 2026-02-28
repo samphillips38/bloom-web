@@ -20,6 +20,8 @@ import ProgressBar from '../components/ProgressBar'
 //  Main Editor Page
 // ═══════════════════════════════════════════════════════
 
+const ACTIVE_GEN_STATUSES = new Set(['pending', 'searching', 'planning', 'reviewing', 'generating'])
+
 export default function WorkshopEditorPage() {
   const { lessonId } = useParams()
   const navigate = useNavigate()
@@ -50,6 +52,8 @@ export default function WorkshopEditorPage() {
   // Generation job state
   const [generationJob, setGenerationJob] = useState<GenerationJob | null>(null)
   const generationPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // Tracks the last seen completedModules count so we can detect incremental progress
+  const lastCompletedModulesRef = useRef<number>(0)
 
   // Prerequisites state
   const [prerequisites, setPrerequisites] = useState<LessonStub[]>([])
@@ -80,12 +84,50 @@ export default function WorkshopEditorPage() {
       const { job } = await api.getGenerationStatus(id)
       if (job) {
         setGenerationJob(job)
-        if (job.status === 'pending' || job.status === 'planning' || job.status === 'reviewing' || job.status === 'generating') {
+        lastCompletedModulesRef.current = job.completedModules
+        if (ACTIVE_GEN_STATUSES.has(job.status)) {
           startPolling(id)
+        } else if (job.status === 'completed') {
+          // Job already finished — ensure we have the latest lesson data without a spinner
+          silentRefreshModules(id)
         }
       }
     } catch {
       // Silently ignore — generation status is optional
+    }
+  }
+
+  /**
+   * Silently refresh lesson data from the server without showing the main loading spinner.
+   * Used during incremental generation so newly completed modules appear in real-time,
+   * and also on job completion to avoid a jarring full-page spinner.
+   */
+  async function silentRefreshModules(id: string) {
+    try {
+      const { lesson } = await api.getEditableLesson(id)
+      // Update all fields that AI generation may set
+      if (lesson.title) setTitle(lesson.title)
+      if (lesson.description !== undefined) setDescription(lesson.description || '')
+      if (lesson.tags?.length) setTags(lesson.tags)
+      if (lesson.themeColor) setThemeColor(lesson.themeColor)
+      setLesson(lesson)
+      if (lesson.modules && lesson.modules.length > 0) {
+        setModules(lesson.modules.map(m => ({
+          id: m.id,
+          title: m.title,
+          description: m.description || '',
+          pages: (m.content || []).map(c => ({
+            id: c.id,
+            contentType: c.contentType,
+            contentData: c.contentData,
+            sources: c.sources || [],
+            saved: true,
+          })),
+          saved: true,
+        })))
+      }
+    } catch {
+      // Ignore — best-effort silent refresh
     }
   }
 
@@ -96,17 +138,22 @@ export default function WorkshopEditorPage() {
         const { job } = await api.getGenerationStatus(id)
         if (!job) return
         setGenerationJob(job)
+
         if (job.status === 'completed') {
           stopPolling()
-          // Reload lesson to pick up generated modules
-          await loadLesson(id)
+          // Silently refresh the lesson data (no full-page spinner flash)
+          await silentRefreshModules(id)
         } else if (job.status === 'failed') {
           stopPolling()
+        } else if (job.status === 'generating' && job.completedModules > lastCompletedModulesRef.current) {
+          // A new module just finished — refresh modules in the background so it appears immediately
+          lastCompletedModulesRef.current = job.completedModules
+          silentRefreshModules(id)
         }
       } catch {
         // ignore transient errors during polling
       }
-    }, 3000)
+    }, 2000)
   }
 
   function stopPolling() {
@@ -120,6 +167,7 @@ export default function WorkshopEditorPage() {
   function handleGenerationStarted(newLessonId: string, job: GenerationJob) {
     setSavedLessonId(newLessonId)
     setGenerationJob(job)
+    lastCompletedModulesRef.current = 0
     navigate(`/workshop/edit/${newLessonId}`, { replace: true })
     startPolling(newLessonId)
   }
@@ -509,8 +557,8 @@ export default function WorkshopEditorPage() {
 
   return (
     <div className="space-y-4 animate-fade-in pb-32">
-      {/* Generation status banner */}
-      {generationJob && (generationJob.status === 'pending' || generationJob.status === 'planning' || generationJob.status === 'generating' || generationJob.status === 'completed' || generationJob.status === 'failed') && (
+      {/* Generation status banner — shown for every status so it never unmounts mid-generation */}
+      {generationJob && (
         <GenerationStatusBanner
           job={generationJob}
           onDismiss={() => setGenerationJob(null)}
@@ -1148,6 +1196,7 @@ function AIDraftDialog({
         completedModules: 0,
         currentModuleTitle: null,
         sourceType,
+        discoveredSources: [],
         error: null,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -1337,9 +1386,13 @@ function GenerationStatusBanner({
   job: GenerationJob
   onDismiss: () => void
 }) {
-  const isActive = job.status === 'pending' || job.status === 'planning' || job.status === 'reviewing' || job.status === 'generating'
+  const [sourcesExpanded, setSourcesExpanded] = useState(false)
+
+  const isActive = job.status === 'pending' || job.status === 'searching' || job.status === 'planning' || job.status === 'reviewing' || job.status === 'generating'
   const isCompleted = job.status === 'completed'
   const isFailed = job.status === 'failed'
+
+  const sources = job.discoveredSources ?? []
 
   const progress = job.totalModules > 0
     ? (job.completedModules + (job.status === 'generating' ? 0.3 : 0)) / job.totalModules
@@ -1347,6 +1400,7 @@ function GenerationStatusBanner({
 
   const statusLabel = () => {
     if (job.status === 'pending') return 'Starting generation...'
+    if (job.status === 'searching') return 'Searching for authoritative sources on this topic...'
     if (job.status === 'planning') return 'AI is planning the lesson structure...'
     if (job.status === 'reviewing') return 'Reviewing and refining the lesson plan...'
     if (job.status === 'generating') {
@@ -1366,10 +1420,12 @@ function GenerationStatusBanner({
 
   const textClass = isFailed ? 'text-red-800' : isCompleted ? 'text-emerald-800' : 'text-purple-800'
   const subTextClass = isFailed ? 'text-red-600' : isCompleted ? 'text-emerald-600' : 'text-purple-600'
+  const mutedClass = isFailed ? 'text-red-400' : isCompleted ? 'text-emerald-500' : 'text-purple-400'
 
   return (
-    <div className={`rounded-2xl border p-4 ${bgClass}`}>
-      <div className="flex items-center gap-3">
+    <div className={`rounded-2xl border ${bgClass} overflow-hidden`}>
+      {/* Main row */}
+      <div className="flex items-center gap-3 p-4">
         <div className={`flex-shrink-0 ${isActive ? 'animate-spin' : ''}`}>
           {isFailed ? (
             <AlertCircle size={20} className="text-red-500" />
@@ -1383,7 +1439,7 @@ function GenerationStatusBanner({
           <p className={`text-sm font-semibold ${textClass}`}>
             {isActive ? 'AI is generating your lesson' : isCompleted ? 'Lesson generated!' : 'Generation failed'}
           </p>
-          <p className={`text-xs truncate mt-0.5 ${subTextClass}`}>{statusLabel()}</p>
+          <p className={`text-xs mt-0.5 ${subTextClass}`}>{statusLabel()}</p>
           {isActive && job.totalModules > 0 && (
             <div className="mt-2">
               <ProgressBar progress={progress} color="orange" animated />
@@ -1402,6 +1458,44 @@ function GenerationStatusBanner({
           </button>
         )}
       </div>
+
+      {/* Discovered sources — shown once available */}
+      {sources.length > 0 && (
+        <div className={`border-t ${isFailed ? 'border-red-200' : isCompleted ? 'border-emerald-200' : 'border-purple-200'}`}>
+          <button
+            onClick={() => setSourcesExpanded(v => !v)}
+            className={`w-full flex items-center justify-between px-4 py-2.5 text-xs font-semibold ${subTextClass} hover:bg-black/5 transition-colors`}
+          >
+            <span className="flex items-center gap-1.5">
+              <Link size={12} />
+              {sources.length} source{sources.length !== 1 ? 's' : ''} found
+            </span>
+            {sourcesExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+          </button>
+
+          {sourcesExpanded && (
+            <div className="px-4 pb-3 space-y-1.5">
+              {sources.map((src, i) => (
+                <div key={i} className="flex items-start gap-2">
+                  <span className={`text-xs ${mutedClass} mt-0.5 flex-shrink-0`}>{i + 1}.</span>
+                  {src.url ? (
+                    <a
+                      href={src.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={`text-xs ${subTextClass} underline underline-offset-2 hover:opacity-75 transition-opacity line-clamp-2`}
+                    >
+                      {src.title}
+                    </a>
+                  ) : (
+                    <span className={`text-xs ${subTextClass} line-clamp-2`}>{src.title}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

@@ -50,6 +50,13 @@ export default function MetadataPanel({
   const currentPage = metadata?.pages?.[currentPageIndex]
   const translateX = isOpen ? 0 : 100 - (slideProgress * 100)
 
+  // Collect lesson-wide sources from the current page's module (or any module — they're shared)
+  const currentModuleId = currentPage?.moduleId
+  const currentModule = metadata?.modules?.find(m => m.id === currentModuleId)
+  const lessonSources = currentModule?.sources?.length
+    ? currentModule.sources
+    : metadata?.modules?.[0]?.sources ?? []
+
   return (
     <>
       {/* Backdrop */}
@@ -122,6 +129,33 @@ export default function MetadataPanel({
               <div className="text-xs text-bloom-text-muted">
                 Created {new Date(metadata.lesson.createdAt).toLocaleDateString()}
               </div>
+
+              {/* AI-discovered References */}
+              {lessonSources.length > 0 && (
+                <div>
+                  <h5 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">References</h5>
+                  <div className="space-y-2">
+                    {lessonSources.map((source, i) => (
+                      <div key={i} className="p-2.5 bg-slate-50 rounded-xl">
+                        <div className="flex items-start justify-between gap-2">
+                          <p className="text-sm font-medium text-bloom-text leading-snug">{source.title}</p>
+                          {source.url && (
+                            <a
+                              href={source.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="p-1 hover:bg-white rounded transition-colors flex-shrink-0"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <ExternalLink size={14} className="text-bloom-orange" />
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </section>
 
             {/* Divider */}

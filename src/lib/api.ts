@@ -244,7 +244,7 @@ export interface LessonMetadata {
     updatedAt: string
     aiInvolvement: string
   }
-  modules?: { id: string; title: string; description: string | null }[]
+  modules?: { id: string; title: string; description: string | null; sources: SourceReference[] }[]
   pages: ContentPageMetadata[]
 }
 
@@ -277,7 +277,7 @@ export interface GeneratedLesson {
   modules: GeneratedModule[]
 }
 
-export type GenerationStatus = 'pending' | 'planning' | 'reviewing' | 'generating' | 'completed' | 'failed'
+export type GenerationStatus = 'pending' | 'searching' | 'planning' | 'reviewing' | 'generating' | 'completed' | 'failed'
 export type GenerationSourceType = 'topic' | 'url' | 'pdf'
 
 export interface GenerationJob {
@@ -289,6 +289,7 @@ export interface GenerationJob {
   completedModules: number
   currentModuleTitle: string | null
   sourceType: GenerationSourceType
+  discoveredSources: SourceReference[]
   error: string | null
   createdAt: string
   updatedAt: string
