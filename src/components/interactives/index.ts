@@ -12,7 +12,6 @@ import BarChartBuilder from './BarChartBuilder'
 import MemoryMatch from './MemoryMatch'
 import Timeline from './Timeline'
 import NumberLine from './NumberLine'
-import HotspotDiagram from './HotspotDiagram'
 import ConceptWeb from './ConceptWeb'
 
 // Registry: maps componentId strings → React components
@@ -42,6 +41,5 @@ export const interactiveComponents: Record<string, ComponentType<any>> = {
   // ── Visual & Spatial ──
   'timeline': Timeline,
   'number-line': NumberLine,
-  'hotspot-diagram': HotspotDiagram,
   'concept-web': ConceptWeb,
 }

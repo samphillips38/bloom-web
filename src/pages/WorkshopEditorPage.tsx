@@ -9,7 +9,7 @@ import {
 import {
   api, LessonWithContent, ContentData,
   ContentBlock, TextSegment, SourceReference, TagInfo,
-  GenerationJob, GenerationSourceType,
+  GenerationJob, GenerationSourceType, LessonStub,
 } from '../lib/api'
 import Card from '../components/Card'
 import Button from '../components/Button'
@@ -51,6 +51,13 @@ export default function WorkshopEditorPage() {
   const [generationJob, setGenerationJob] = useState<GenerationJob | null>(null)
   const generationPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
+  // Prerequisites state
+  const [prerequisites, setPrerequisites] = useState<LessonStub[]>([])
+  const [prereqSearch, setPrereqSearch] = useState('')
+  const [prereqResults, setPrereqResults] = useState<LessonStub[]>([])
+  const [isSearchingPrereqs, setIsSearchingPrereqs] = useState(false)
+  const [showPrereqTab, setShowPrereqTab] = useState(false)
+
   const totalPages = modules.reduce((sum, m) => sum + m.pages.length, 0)
   const allPagesFlat: PageDraft[] = modules.flatMap(m => m.pages)
 
@@ -73,7 +80,7 @@ export default function WorkshopEditorPage() {
       const { job } = await api.getGenerationStatus(id)
       if (job) {
         setGenerationJob(job)
-        if (job.status === 'pending' || job.status === 'planning' || job.status === 'generating') {
+        if (job.status === 'pending' || job.status === 'planning' || job.status === 'reviewing' || job.status === 'generating') {
           startPolling(id)
         }
       }
@@ -117,6 +124,48 @@ export default function WorkshopEditorPage() {
     startPolling(newLessonId)
   }
 
+  // ── Search lessons for prerequisite linking ──
+  async function searchLessonsForPrereq(query: string) {
+    if (!query.trim()) { setPrereqResults([]); return }
+    setIsSearchingPrereqs(true)
+    try {
+      const res = await api.browseLessons({ search: query, limit: 8 })
+      const lessonsList = (res.lessons || []) as Array<{
+        id: string; title: string; description?: string | null;
+        themeColor?: string | null; iconUrl?: string | null; tags?: string[]
+      }>
+      const prereqIds = new Set(prerequisites.map((p: LessonStub) => p.id))
+      setPrereqResults(lessonsList
+        .filter(l => l.id !== savedLessonId && !prereqIds.has(l.id))
+        .map(l => ({ id: l.id, title: l.title, description: l.description || null, themeColor: l.themeColor || null, iconUrl: l.iconUrl || null, tags: l.tags || [] })))
+    } catch {
+      setPrereqResults([])
+    } finally {
+      setIsSearchingPrereqs(false)
+    }
+  }
+
+  async function handleAddPrerequisite(prereq: LessonStub) {
+    if (!savedLessonId) return
+    try {
+      await api.addPrerequisite(savedLessonId, prereq.id)
+      setPrerequisites(prev => [...prev, prereq])
+      setPrereqResults(prev => prev.filter(p => p.id !== prereq.id))
+    } catch (err) {
+      console.error('Failed to add prerequisite:', err)
+    }
+  }
+
+  async function handleRemovePrerequisite(prereqId: string) {
+    if (!savedLessonId) return
+    try {
+      await api.removePrerequisite(savedLessonId, prereqId)
+      setPrerequisites(prev => prev.filter(p => p.id !== prereqId))
+    } catch (err) {
+      console.error('Failed to remove prerequisite:', err)
+    }
+  }
+
   async function loadLesson(id: string) {
     try {
       setIsLoading(true)
@@ -128,6 +177,10 @@ export default function WorkshopEditorPage() {
       setVisibility(lesson.visibility as 'private' | 'public')
       setEditPolicy(lesson.editPolicy as 'open' | 'approval')
       setTags(lesson.tags || [])
+      // Load prerequisites
+      if (lesson.prerequisites && lesson.prerequisites.length > 0) {
+        setPrerequisites(lesson.prerequisites)
+      }
 
       if (lesson.modules && lesson.modules.length > 0) {
         setModules(lesson.modules.map(m => ({
@@ -539,6 +592,95 @@ export default function WorkshopEditorPage() {
       {/* Settings Panel */}
       {showSettings && (
         <Card className="space-y-4 animate-slide-up">
+          {/* Tab header */}
+          <div className="flex gap-1 bg-slate-100 rounded-xl p-1">
+            <button
+              onClick={() => setShowPrereqTab(false)}
+              className={`flex-1 py-1.5 text-sm font-medium rounded-lg transition-all ${!showPrereqTab ? 'bg-white shadow-sm text-bloom-text' : 'text-bloom-text-muted'}`}
+            >
+              Settings
+            </button>
+            <button
+              onClick={() => setShowPrereqTab(true)}
+              className={`flex-1 py-1.5 text-sm font-medium rounded-lg transition-all flex items-center justify-center gap-1 ${showPrereqTab ? 'bg-white shadow-sm text-bloom-text' : 'text-bloom-text-muted'}`}
+            >
+              <Link size={13} />
+              Prerequisites
+              {prerequisites.length > 0 && (
+                <span className="ml-1 px-1.5 py-0.5 rounded-full bg-bloom-orange text-white text-xs font-bold">{prerequisites.length}</span>
+              )}
+            </button>
+          </div>
+
+          {showPrereqTab ? (
+            /* Prerequisites tab */
+            <div className="space-y-4">
+              <p className="text-xs text-bloom-text-secondary leading-relaxed">
+                Link lessons that learners should complete before this one. These will be shown at the start of the lesson and help with discoverability.
+              </p>
+              {prerequisites.length > 0 && (
+                <div className="space-y-2">
+                  {prerequisites.map((prereq: LessonStub) => (
+                    <div key={prereq.id} className="flex items-center gap-3 p-3 rounded-xl bg-slate-50 border border-slate-200">
+                      <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm flex-shrink-0" style={{ background: prereq.themeColor || '#FF6B35' }}>
+                        {prereq.title.charAt(0)}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-bloom-text truncate">{prereq.title}</p>
+                        {prereq.description && <p className="text-xs text-bloom-text-muted truncate">{prereq.description}</p>}
+                      </div>
+                      <button
+                        onClick={() => handleRemovePrerequisite(prereq.id)}
+                        className="p-1.5 hover:bg-red-50 rounded-lg transition-colors"
+                      >
+                        <X size={14} className="text-bloom-text-muted hover:text-red-500" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="space-y-2">
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={prereqSearch}
+                    onChange={e => {
+                      setPrereqSearch(e.target.value)
+                      searchLessonsForPrereq(e.target.value)
+                    }}
+                    placeholder="Search lessons by title…"
+                    className="flex-1 text-sm border rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-bloom-orange/30"
+                  />
+                  {isSearchingPrereqs && <Loader2 size={18} className="animate-spin text-bloom-text-muted self-center" />}
+                </div>
+                {prereqResults.length > 0 && (
+                  <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                    {prereqResults.map((result: LessonStub) => (
+                      <button
+                        key={result.id}
+                        onClick={() => { handleAddPrerequisite(result); setPrereqSearch(''); setPrereqResults([]) }}
+                        className="w-full flex items-center gap-3 p-3 rounded-xl border border-slate-200 hover:border-bloom-orange/40 hover:bg-bloom-orange/5 transition-all text-left"
+                      >
+                        <div className="w-7 h-7 rounded-lg flex items-center justify-center text-white font-bold text-xs flex-shrink-0" style={{ background: result.themeColor || '#FF6B35' }}>
+                          {result.title.charAt(0)}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-bloom-text truncate">{result.title}</p>
+                          {result.description && <p className="text-xs text-bloom-text-muted truncate">{result.description}</p>}
+                        </div>
+                        <Plus size={14} className="text-bloom-text-muted flex-shrink-0" />
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {!savedLessonId && (
+                  <p className="text-xs text-amber-600 bg-amber-50 rounded-lg p-2">Save the lesson first to link prerequisites.</p>
+                )}
+              </div>
+            </div>
+          ) : (
+          /* Settings tab */
+          <div className="space-y-4">
           <h3 className="font-semibold text-bloom-text">Lesson Settings</h3>
 
           {/* Theme Color */}
@@ -680,6 +822,8 @@ export default function WorkshopEditorPage() {
               </div>
             )}
           </div>
+          </div>
+          )}
         </Card>
       )}
 
@@ -948,7 +1092,6 @@ function AIDraftDialog({
   const [topic, setTopic] = useState('')
   const [urlInput, setUrlInput] = useState('')
   const [pdfFile, setPdfFile] = useState<File | null>(null)
-  const [moduleCount, setModuleCount] = useState(3)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -989,7 +1132,6 @@ function AIDraftDialog({
 
       const { lessonId, jobId } = await api.startAIGeneration({
         topic: topicText || 'Lesson from source material',
-        moduleCount,
         sourceType,
         pdfFile: activeTab === 'pdf' ? pdfFile ?? undefined : undefined,
         sourceContent,
@@ -1002,7 +1144,7 @@ function AIDraftDialog({
         lessonId,
         userId: '',
         status: 'pending',
-        totalModules: moduleCount,
+        totalModules: 0,
         completedModules: 0,
         currentModuleTitle: null,
         sourceType,
@@ -1144,30 +1286,11 @@ function AIDraftDialog({
             </div>
           )}
 
-          {/* Module Count Slider (all tabs) */}
-          <div>
-            <label className="text-sm font-medium text-bloom-text-secondary block mb-1.5">
-              Number of modules: <span className="text-purple-600 font-bold">{moduleCount}</span>
-            </label>
-            <input
-              type="range"
-              min={2}
-              max={6}
-              value={moduleCount}
-              onChange={e => setModuleCount(parseInt(e.target.value))}
-              className="w-full accent-purple-500"
-            />
-            <div className="flex justify-between text-xs text-bloom-text-muted mt-0.5">
-              <span>2 (quick ~3 min)</span>
-              <span>6 (detailed ~10 min)</span>
-            </div>
-          </div>
-
           {/* How it works note */}
           <div className="flex items-start gap-2.5 p-3 rounded-xl bg-indigo-50 border border-indigo-100">
             <Sparkles size={15} className="text-indigo-500 flex-shrink-0 mt-0.5" />
             <p className="text-xs text-indigo-700 leading-relaxed">
-              Generation happens <strong>in the background</strong> — you can continue editing or leave and come back. A progress bar will appear at the top of the editor.
+              The AI plans, reviews, and refines the lesson before building it — then runs <strong>in the background</strong>. You can continue editing or come back later. The number of modules is chosen automatically based on the topic.
             </p>
           </div>
 
@@ -1214,7 +1337,7 @@ function GenerationStatusBanner({
   job: GenerationJob
   onDismiss: () => void
 }) {
-  const isActive = job.status === 'pending' || job.status === 'planning' || job.status === 'generating'
+  const isActive = job.status === 'pending' || job.status === 'planning' || job.status === 'reviewing' || job.status === 'generating'
   const isCompleted = job.status === 'completed'
   const isFailed = job.status === 'failed'
 
@@ -1225,6 +1348,7 @@ function GenerationStatusBanner({
   const statusLabel = () => {
     if (job.status === 'pending') return 'Starting generation...'
     if (job.status === 'planning') return 'AI is planning the lesson structure...'
+    if (job.status === 'reviewing') return 'Reviewing and refining the lesson plan...'
     if (job.status === 'generating') {
       if (job.currentModuleTitle) return `Generating: ${job.currentModuleTitle}`
       return `Generating module ${job.completedModules + 1} of ${job.totalModules}...`

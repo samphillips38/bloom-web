@@ -829,7 +829,7 @@ function QuestionEditor({
   function removeOption(index: number) {
     const newOptions = data.options.filter((_, i) => i !== index)
     updateField('options', newOptions)
-    if (data.correctIndex >= newOptions.length) {
+    if ((data.correctIndex ?? 0) >= newOptions.length) {
       updateField('correctIndex', 0)
     }
   }
