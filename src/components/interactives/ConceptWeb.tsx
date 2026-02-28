@@ -15,12 +15,12 @@ interface ConceptWebProps {
 }
 
 const NODE_COLORS = [
-  { ring: 'ring-blue-400', bg: 'bg-blue-50', badge: 'bg-blue-500', text: 'text-blue-800', border: 'border-blue-200', panel: 'bg-blue-50 border-blue-200' },
-  { ring: 'ring-purple-400', bg: 'bg-purple-50', badge: 'bg-purple-500', text: 'text-purple-800', border: 'border-purple-200', panel: 'bg-purple-50 border-purple-200' },
-  { ring: 'ring-emerald-400', bg: 'bg-emerald-50', badge: 'bg-emerald-500', text: 'text-emerald-800', border: 'border-emerald-200', panel: 'bg-emerald-50 border-emerald-200' },
-  { ring: 'ring-amber-400', bg: 'bg-amber-50', badge: 'bg-amber-500', text: 'text-amber-800', border: 'border-amber-200', panel: 'bg-amber-50 border-amber-200' },
-  { ring: 'ring-rose-400', bg: 'bg-rose-50', badge: 'bg-rose-500', text: 'text-rose-800', border: 'border-rose-200', panel: 'bg-rose-50 border-rose-200' },
-  { ring: 'ring-cyan-400', bg: 'bg-cyan-50', badge: 'bg-cyan-500', text: 'text-cyan-800', border: 'border-cyan-200', panel: 'bg-cyan-50 border-cyan-200' },
+  { bg: 'bg-blue-50', border: 'border-blue-200', headerBg: 'bg-blue-100', label: 'text-blue-800', desc: 'text-blue-700', dot: 'bg-blue-400' },
+  { bg: 'bg-purple-50', border: 'border-purple-200', headerBg: 'bg-purple-100', label: 'text-purple-800', desc: 'text-purple-700', dot: 'bg-purple-400' },
+  { bg: 'bg-emerald-50', border: 'border-emerald-200', headerBg: 'bg-emerald-100', label: 'text-emerald-800', desc: 'text-emerald-700', dot: 'bg-emerald-400' },
+  { bg: 'bg-amber-50', border: 'border-amber-200', headerBg: 'bg-amber-100', label: 'text-amber-800', desc: 'text-amber-700', dot: 'bg-amber-400' },
+  { bg: 'bg-rose-50', border: 'border-rose-200', headerBg: 'bg-rose-100', label: 'text-rose-800', desc: 'text-rose-700', dot: 'bg-rose-400' },
+  { bg: 'bg-cyan-50', border: 'border-cyan-200', headerBg: 'bg-cyan-100', label: 'text-cyan-800', desc: 'text-cyan-700', dot: 'bg-cyan-400' },
 ]
 
 export default function ConceptWeb({
@@ -35,107 +35,100 @@ export default function ConceptWeb({
     { label: 'Informal', description: 'Logic applied to natural language arguments, including identification of fallacies, rhetorical analysis, and critical thinking.', emoji: '💬' },
   ],
 }: ConceptWebProps) {
-  const [active, setActive] = useState<number | null>(null)
+  const [expanded, setExpanded] = useState<Set<number>>(new Set())
   const [visited, setVisited] = useState<Set<number>>(new Set())
 
-  function handleNodeClick(i: number) {
-    setActive(prev => prev === i ? null : i)
+  function toggleNode(i: number) {
+    setExpanded(prev => {
+      const next = new Set(prev)
+      if (next.has(i)) {
+        next.delete(i)
+      } else {
+        next.add(i)
+      }
+      return next
+    })
     setVisited(prev => new Set([...prev, i]))
   }
 
-  // Arrange nodes in a circle
-  const radius = 110
-  const cx = 150
-  const cy = 130
+  const allVisited = visited.size === nodes.length
 
   return (
-    <div className="rounded-2xl bg-gradient-to-br from-indigo-50 to-violet-50 border border-indigo-100 p-5 space-y-4">
+    <div className="rounded-2xl bg-white border border-slate-200 shadow-sm overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <span className="text-sm font-semibold text-indigo-700">{title}</span>
-        <span className="text-xs text-indigo-400">{visited.size}/{nodes.length} explored</span>
+      <div className="px-5 pt-4 pb-3 border-b border-slate-100 flex items-center justify-between">
+        <span className="text-sm font-semibold text-slate-700">{title}</span>
+        <span className="text-xs text-slate-400">{visited.size}/{nodes.length} explored</span>
       </div>
 
-      {/* SVG web */}
-      <div className="flex justify-center">
-        <svg width="300" height="260" viewBox="0 0 300 260" className="overflow-visible">
-          {/* Connection lines */}
-          {nodes.map((_node, i) => {
-            const angle = (i / nodes.length) * 2 * Math.PI - Math.PI / 2
-            const nx = cx + radius * Math.cos(angle)
-            const ny = cy + radius * Math.sin(angle)
-            return (
-              <line
-                key={i}
-                x1={cx} y1={cy} x2={nx} y2={ny}
-                stroke={active === i ? '#6366f1' : '#c7d2fe'}
-                strokeWidth={active === i ? 2 : 1}
-                strokeDasharray={active === i ? '0' : '4 3'}
-                className="transition-all duration-200"
-              />
-            )
-          })}
-
-          {/* Center node */}
-          <g>
-            <circle cx={cx} cy={cy} r={36} fill="white" stroke="#6366f1" strokeWidth={2} />
-            <text x={cx} y={cy - 8} textAnchor="middle" fontSize="20">{centerEmoji}</text>
-            <text x={cx} y={cy + 10} textAnchor="middle" fontSize="11" fontWeight="bold" fill="#3730a3">{center}</text>
-          </g>
-
-          {/* Satellite nodes */}
-          {nodes.map((node, i) => {
-            void NODE_COLORS[i % NODE_COLORS.length] // color applied via SVG fill below
-            const angle = (i / nodes.length) * 2 * Math.PI - Math.PI / 2
-            const nx = cx + radius * Math.cos(angle)
-            const ny = cy + radius * Math.sin(angle)
-            const isActive = active === i
-            const isVisited = visited.has(i)
-
-            return (
-              <g key={i} onClick={() => handleNodeClick(i)} className="cursor-pointer">
-                <circle
-                  cx={nx} cy={ny} r={isActive ? 28 : 24}
-                  fill={isActive ? '#6366f1' : isVisited ? '#ede9fe' : 'white'}
-                  stroke={isActive ? '#4f46e5' : '#c7d2fe'}
-                  strokeWidth={isActive ? 2.5 : 1.5}
-                  className="transition-all duration-200"
-                />
-                {/* Pulse for unvisited */}
-                {!isVisited && !isActive && (
-                  <circle cx={nx} cy={ny} r={26} fill="none" stroke="#6366f1" strokeWidth={1} opacity={0.4}>
-                    <animate attributeName="r" from="24" to="32" dur="2s" repeatCount="indefinite" />
-                    <animate attributeName="opacity" from="0.4" to="0" dur="2s" repeatCount="indefinite" />
-                  </circle>
-                )}
-                <text x={nx} y={ny - 6} textAnchor="middle" fontSize="14">{node.emoji ?? '💡'}</text>
-                <text x={nx} y={ny + 8} textAnchor="middle" fontSize="9" fontWeight="bold"
-                  fill={isActive ? 'white' : '#4338ca'}>
-                  {node.label.length > 10 ? node.label.slice(0, 9) + '…' : node.label}
-                </text>
-              </g>
-            )
-          })}
-        </svg>
-      </div>
-
-      {/* Description panel */}
-      {active !== null ? (
-        <div className={`rounded-xl border-2 p-4 transition-all duration-200 ${NODE_COLORS[active % NODE_COLORS.length].panel}`}>
-          <div className="flex items-center gap-2 mb-2">
-            <span className="text-xl">{nodes[active].emoji ?? '💡'}</span>
-            <span className={`font-bold text-sm ${NODE_COLORS[active % NODE_COLORS.length].text}`}>{nodes[active].label}</span>
-          </div>
-          <p className="text-xs text-slate-600 leading-relaxed">{nodes[active].description}</p>
+      {/* Central hub */}
+      <div className="px-5 pt-4 pb-3 flex items-center gap-3">
+        <div className="w-12 h-12 rounded-2xl bg-indigo-600 flex items-center justify-center shadow-sm flex-shrink-0">
+          <span className="text-2xl">{centerEmoji}</span>
         </div>
-      ) : (
-        <p className="text-xs text-indigo-400 text-center">Tap a satellite node to explore its concept</p>
+        <div>
+          <p className="text-xs font-medium text-indigo-500 uppercase tracking-wide">Central concept</p>
+          <p className="text-base font-bold text-slate-800">{center}</p>
+        </div>
+      </div>
+
+      {/* Connector line */}
+      <div className="mx-5 mb-1 flex items-center gap-2">
+        <div className="w-0.5 h-4 bg-slate-200 ml-5" />
+      </div>
+
+      {/* Concept cards */}
+      <div className="px-4 pb-4 space-y-2">
+        {nodes.map((node, i) => {
+          const colors = NODE_COLORS[i % NODE_COLORS.length]
+          const isExpanded = expanded.has(i)
+          const isVisited = visited.has(i)
+
+          return (
+            <div key={i} className={`rounded-xl border transition-all duration-200 ${colors.border} ${isExpanded ? colors.bg : 'bg-white'}`}>
+              <button
+                onClick={() => toggleNode(i)}
+                className="w-full flex items-center gap-3 px-4 py-3 text-left"
+              >
+                {/* Color dot / visited indicator */}
+                <div className={`w-2 h-2 rounded-full flex-shrink-0 transition-all ${isVisited ? colors.dot : 'bg-slate-200'}`} />
+
+                {/* Emoji */}
+                <span className="text-lg flex-shrink-0">{node.emoji ?? '💡'}</span>
+
+                {/* Label */}
+                <span className={`text-sm font-semibold flex-1 ${colors.label}`}>{node.label}</span>
+
+                {/* Chevron */}
+                <span className={`text-xs transition-transform duration-200 text-slate-400 ${isExpanded ? 'rotate-180' : ''}`}>
+                  ▼
+                </span>
+              </button>
+
+              {/* Description — expands on tap */}
+              {isExpanded && (
+                <div className="px-4 pb-3">
+                  <div className="pl-5 border-l-2 border-current ml-2.5" style={{ borderColor: 'inherit' }}>
+                    <p className={`text-sm leading-relaxed ${colors.desc}`}>{node.description}</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Completion banner */}
+      {allVisited && (
+        <div className="mx-4 mb-4 p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-700 font-semibold text-center">
+          🌟 All concepts explored!
+        </div>
       )}
 
-      {visited.size === nodes.length && (
-        <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-700 font-semibold text-center">
-          🌟 Full web explored!
-        </div>
+      {!allVisited && (
+        <p className="pb-4 text-xs text-slate-400 text-center">
+          Tap each concept to learn more
+        </p>
       )}
     </div>
   )

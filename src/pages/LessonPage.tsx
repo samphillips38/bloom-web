@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
-import { X, Zap, Check, Lightbulb, ChevronRight, ChevronDown, ChevronUp, ChevronLeft, Sparkles, Info, BookOpen } from 'lucide-react'
-import { api, LessonWithContent, LessonContent, LessonModule, ContentData } from '../lib/api'
+import { X, Zap, Check, Lightbulb, ChevronRight, ChevronDown, ChevronUp, ChevronLeft, Sparkles, Info, BookOpen, ArrowRight, Trophy, RotateCcw, CornerDownLeft } from 'lucide-react'
+import { api, LessonWithContent, LessonContent, LessonModule, ContentData, LessonStub } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import ProgressBar from '../components/ProgressBar'
 import RichContentRenderer, { RichText } from '../components/RichContentRenderer'
@@ -23,6 +23,20 @@ export default function LessonPage() {
   const [showCelebration, setShowCelebration] = useState(false)
   const [showModuleComplete, setShowModuleComplete] = useState(false)
   const [completedModuleIndex, setCompletedModuleIndex] = useState(-1)
+
+  // Prerequisites intro screen
+  const [showPrerequisites, setShowPrerequisites] = useState(false)
+
+  // New question format state
+  const [hasChecked, setHasChecked] = useState(false)
+  const [multiSelectChosen, setMultiSelectChosen] = useState<Set<number>>(new Set())
+  const [fillBlankInput, setFillBlankInput] = useState('')
+  const [wordArrangeSelected, setWordArrangeSelected] = useState<string[]>([])
+  const [wordArrangeRemaining, setWordArrangeRemaining] = useState<string[]>([])
+
+  // Quiz score tracking
+  const [quizCorrect, setQuizCorrect] = useState(0)
+  const [quizTotal, setQuizTotal] = useState(0)
 
   // Pull-to-advance/go-back state
   const [pullDistance, setPullDistance] = useState(0)           // always >= 0
@@ -57,10 +71,19 @@ export default function LessonPage() {
     if (!lessonId) return
     setIsLoading(true)
 
-    api.getLesson(lessonId)
-      .then(({ lesson }) => {
+    Promise.all([
+      api.getLesson(lessonId),
+      api.getLessonProgress(lessonId).catch(() => ({ progress: null })),
+    ])
+      .then(([{ lesson }, { progress }]) => {
         setLesson(lesson)
-        // Handle ?start=N query param
+
+        // Show prerequisites intro screen if the lesson has prerequisites
+        if (lesson.prerequisites && lesson.prerequisites.length > 0) {
+          setShowPrerequisites(true)
+        }
+
+        // Handle ?start=N query param — takes priority
         const startParam = searchParams.get('start')
         if (startParam) {
           const startIdx = parseInt(startParam)
@@ -68,6 +91,11 @@ export default function LessonPage() {
           if (!isNaN(startIdx) && startIdx > 0 && startIdx < totalPages) {
             setCurrentIndex(startIdx)
           }
+        } else if (progress?.lastPageIndex && progress.lastPageIndex > 0 && !progress.completed) {
+          // Restore last viewed page (resume where left off)
+          const totalPages = (lesson.modules || []).reduce((sum, m) => sum + (m.content || []).length, 0) || lesson.content.length
+          const resumeIdx = Math.min(progress.lastPageIndex, totalPages - 1)
+          setCurrentIndex(resumeIdx)
         }
       })
       .catch(err => console.error('Failed to load lesson:', err))
@@ -129,8 +157,6 @@ export default function LessonPage() {
   const isLast = flatPages.length > 0 ? currentIndex >= flatPages.length - 1 : false
   const isFirst = currentIndex === 0
   const isQuestion = currentContent?.contentData.type === 'question'
-  const canContinue = !isQuestion || isCorrect === true
-  const pullProgress = Math.min(pullDistance / PULL_THRESHOLD, 1)
 
   // Module tracking
   const currentModuleIndex = useMemo(() => {
@@ -145,6 +171,27 @@ export default function LessonPage() {
 
   const currentModule = currentModuleIndex >= 0 ? modules[currentModuleIndex] : null
   const isModuleBoundary = moduleBoundaries.includes(currentIndex) && !isLast
+
+  // Determine if current module is the quiz module
+  const isQuizModule = useMemo(() => {
+    if (!currentModule) return false
+    return currentModule.title.toLowerCase().includes('quiz')
+  }, [currentModule])
+
+  // For new question formats: canContinue depends on format
+  const currentQuestionFormat = isQuestion && currentContent?.contentData.type === 'question'
+    ? (currentContent.contentData as Extract<ContentData, { type: 'question' }>).format || 'multiple-choice'
+    : null
+
+  const canContinue = !isQuestion || (() => {
+    if (!currentQuestionFormat || currentQuestionFormat === 'multiple-choice' || currentQuestionFormat === 'true-false') {
+      return isCorrect === true
+    }
+    // multi-select, fill-blank, word-arrange: need to have checked and be correct
+    return hasChecked && isCorrect === true
+  })()
+
+  const pullProgress = Math.min(pullDistance / PULL_THRESHOLD, 1)
 
   // Keep refs in sync for event handlers
   canAdvanceRef.current = canContinue && !isTransitioningRef.current
@@ -170,7 +217,7 @@ export default function LessonPage() {
     if (isLast) {
       setShowCelebration(true)
       try {
-        await api.updateProgress(lessonId!, true, 100)
+        await api.updateProgress(lessonId!, true, 100, flatPages.length - 1)
         await refreshStats()
       } catch (err) {
         console.error('Failed to save progress:', err)
@@ -193,10 +240,19 @@ export default function LessonPage() {
     }
 
     setShowModuleComplete(false)
-    setCurrentIndex(prev => prev + 1)
+    const nextIndex = currentIndex + 1
+    setCurrentIndex(nextIndex)
     setSelectedAnswer(null)
     setIsCorrect(null)
     setShowExplanation(false)
+    setHasChecked(false)
+    setMultiSelectChosen(new Set())
+    setFillBlankInput('')
+    setWordArrangeSelected([])
+    setWordArrangeRemaining([])
+
+    // Save progress (fire-and-forget)
+    api.savePage(lessonId!, nextIndex).catch(() => {})
 
     if (containerRef.current) containerRef.current.scrollTop = 0
 
@@ -227,6 +283,11 @@ export default function LessonPage() {
     setSelectedAnswer(null)
     setIsCorrect(null)
     setShowExplanation(false)
+    setHasChecked(false)
+    setMultiSelectChosen(new Set())
+    setFillBlankInput('')
+    setWordArrangeSelected([])
+    setWordArrangeRemaining([])
 
     if (containerRef.current) containerRef.current.scrollTop = 0
 
@@ -264,24 +325,137 @@ export default function LessonPage() {
   doGoBackRef.current = doGoBack
   doOpenMetadataRef.current = doOpenMetadata
 
-  // ── Answer selection ──
+  // ── Answer selection (multiple-choice & true-false) ──
   function handleAnswerSelect(index: number) {
-    if (selectedAnswer !== null) return
+    if (selectedAnswer !== null || hasChecked) return
     setSelectedAnswer(index)
-    const data = currentContent?.contentData as ContentData
+    const data = currentContent?.contentData as Extract<ContentData, { type: 'question' }>
     if (data.type === 'question') {
+      const format = data.format || 'multiple-choice'
+      if (format === 'multiple-choice' || format === 'true-false') {
       const correct = index === data.correctIndex
       setIsCorrect(correct)
       if (correct) {
+          if (isQuizModule) setQuizCorrect(p => p + 1)
         setTimeout(() => setShowExplanation(true), 600)
       } else {
         setTimeout(() => {
           setSelectedAnswer(null)
           setIsCorrect(null)
         }, 1400)
+        }
       }
     }
   }
+
+  // ── Multi-select toggle ──
+  function handleMultiSelectToggle(index: number) {
+    if (hasChecked) return
+    setMultiSelectChosen(prev => {
+      const next = new Set(prev)
+      if (next.has(index)) next.delete(index)
+      else next.add(index)
+      return next
+    })
+  }
+
+  // ── Check multi-select answer ──
+  function handleCheckMultiSelect() {
+    const data = currentContent?.contentData as Extract<ContentData, { type: 'question' }>
+    if (data.type !== 'question') return
+    const correctSet = new Set(data.correctIndices || [])
+    const correct = correctSet.size === multiSelectChosen.size &&
+      [...multiSelectChosen].every(i => correctSet.has(i))
+    setHasChecked(true)
+    setIsCorrect(correct)
+    if (correct) {
+      if (isQuizModule) setQuizCorrect(p => p + 1)
+      setTimeout(() => setShowExplanation(true), 600)
+    } else {
+      setTimeout(() => {
+        setHasChecked(false)
+        setIsCorrect(null)
+        setMultiSelectChosen(new Set())
+      }, 1600)
+    }
+  }
+
+  // ── Check fill-blank answer ──
+  function handleCheckFillBlank() {
+    const data = currentContent?.contentData as Extract<ContentData, { type: 'question' }>
+    if (data.type !== 'question') return
+    const correct = fillBlankInput.trim().toLowerCase() === (data.correctAnswer || '').toLowerCase()
+    setHasChecked(true)
+    setIsCorrect(correct)
+    if (correct) {
+      if (isQuizModule) setQuizCorrect(p => p + 1)
+      setTimeout(() => setShowExplanation(true), 600)
+    } else {
+      setTimeout(() => {
+        setHasChecked(false)
+        setIsCorrect(null)
+        setFillBlankInput('')
+      }, 1600)
+    }
+  }
+
+  // ── Word-arrange: tap chip to add/remove ──
+  function handleWordArrangeInit(options: string[]) {
+    if (wordArrangeRemaining.length === 0 && wordArrangeSelected.length === 0) {
+      setWordArrangeRemaining([...options].sort(() => Math.random() - 0.5))
+    }
+  }
+
+  function handleWordArrangeSelect(word: string) {
+    if (hasChecked) return
+    setWordArrangeRemaining(prev => {
+      const idx = prev.indexOf(word)
+      if (idx === -1) return prev
+      return [...prev.slice(0, idx), ...prev.slice(idx + 1)]
+    })
+    setWordArrangeSelected(prev => [...prev, word])
+  }
+
+  function handleWordArrangeDeselect(word: string) {
+    if (hasChecked) return
+    setWordArrangeSelected(prev => {
+      const idx = prev.indexOf(word)
+      if (idx === -1) return prev
+      return [...prev.slice(0, idx), ...prev.slice(idx + 1)]
+    })
+    setWordArrangeRemaining(prev => [...prev, word])
+  }
+
+  function handleCheckWordArrange() {
+    const data = currentContent?.contentData as Extract<ContentData, { type: 'question' }>
+    if (data.type !== 'question') return
+    const answer = wordArrangeSelected.join(' ').trim().toLowerCase()
+    const correct = answer === (data.correctAnswer || '').toLowerCase()
+    setHasChecked(true)
+    setIsCorrect(correct)
+    if (correct) {
+      if (isQuizModule) setQuizCorrect(p => p + 1)
+      setTimeout(() => setShowExplanation(true), 600)
+    } else {
+      setTimeout(() => {
+        setHasChecked(false)
+        setIsCorrect(null)
+        setWordArrangeSelected([])
+        // Restore remaining from options
+        const allOptions = data.options || []
+        setWordArrangeRemaining([...allOptions].sort(() => Math.random() - 0.5))
+      }, 1600)
+    }
+  }
+
+  // Track quiz question count when entering quiz module
+  useEffect(() => {
+    if (isQuizModule && flatPages.length > 0) {
+      const quizPages = modules.find(m => m.title.toLowerCase().includes('quiz'))
+      const qCount = quizPages?.content?.length || 0
+      if (qCount > 0 && quizTotal !== qCount) setQuizTotal(qCount)
+    }
+  }, [isQuizModule, modules, flatPages.length, quizTotal])
 
   // Auto-scroll to explanation when it appears
   useEffect(() => {
@@ -634,16 +808,129 @@ export default function LessonPage() {
     )
   }
 
-  if (showCelebration) {
+  // ── Prerequisites intro screen ──
+  if (showPrerequisites && lesson?.prerequisites && lesson.prerequisites.length > 0) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-bloom-green/90 to-emerald-600 flex items-center justify-center">
-        <div className="text-center animate-bounce-in">
+      <div className="fixed inset-0 flex flex-col bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 overflow-hidden" style={{ height: '100dvh' }}>
+        <header className="flex-shrink-0 px-4 py-4">
+          <button
+            onClick={() => navigate(-1)}
+            className="p-2 hover:bg-white/10 rounded-xl transition-colors"
+          >
+            <X size={24} className="text-white/60" />
+          </button>
+        </header>
+        <main className="flex-1 overflow-y-auto px-6 flex flex-col justify-center">
+          <div className="max-w-lg mx-auto w-full py-8">
+            <div className="w-14 h-14 rounded-2xl bg-amber-500/20 flex items-center justify-center mb-6">
+              <BookOpen size={28} className="text-amber-400" />
+            </div>
+            <h1 className="text-3xl font-bold text-white mb-3">{lesson.title}</h1>
+            <p className="text-white/60 text-base mb-8">{lesson.description}</p>
+
+            <div className="bg-white/5 border border-white/10 rounded-2xl p-5 mb-8">
+              <p className="text-amber-400 text-xs font-bold uppercase tracking-widest mb-4">
+                Prerequisites — concepts you should know
+              </p>
+              <div className="space-y-3">
+                {lesson.prerequisites.map((prereq: LessonStub) => (
+                  <button
+                    key={prereq.id}
+                    onClick={() => navigate(`/lesson/${prereq.id}`)}
+                    className="w-full flex items-center gap-3 p-3 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 transition-colors text-left"
+                  >
+                    <div
+                      className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 text-white font-bold text-sm"
+                      style={{ background: prereq.themeColor || '#FF6B35' }}
+                    >
+                      {prereq.title.charAt(0)}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-white font-medium text-sm truncate">{prereq.title}</p>
+                      {prereq.description && (
+                        <p className="text-white/40 text-xs truncate">{prereq.description}</p>
+                      )}
+                    </div>
+                    <ArrowRight size={16} className="text-white/30 flex-shrink-0" />
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <button
+              onClick={() => setShowPrerequisites(false)}
+              className="w-full py-4 bg-white text-slate-900 rounded-2xl font-bold text-lg hover:bg-white/90 transition-all shadow-xl"
+            >
+              Start Lesson
+              <ChevronRight size={20} className="inline-block ml-2" />
+            </button>
+            <button
+              onClick={() => setShowPrerequisites(false)}
+              className="w-full py-3 mt-3 text-white/40 text-sm hover:text-white/60 transition-colors"
+            >
+              I already know these — skip
+            </button>
+          </div>
+        </main>
+      </div>
+    )
+  }
+
+  if (showCelebration) {
+    const nextLessons = lesson?.nextLessons || []
+    const quizPercent = quizTotal > 0 ? Math.round((quizCorrect / quizTotal) * 100) : null
+
+    return (
+      <div className="fixed inset-0 flex flex-col bg-gradient-to-br from-emerald-600 via-green-600 to-teal-600 overflow-hidden" style={{ height: '100dvh' }}>
+        <main className="flex-1 overflow-y-auto px-6 flex flex-col items-center justify-center">
+          <div className="text-center animate-bounce-in max-w-md w-full py-8">
           <div className="w-24 h-24 rounded-full bg-white/20 flex items-center justify-center mx-auto mb-6">
             <Sparkles size={48} className="text-white" />
           </div>
           <h1 className="text-4xl font-bold text-white mb-2">Lesson Complete!</h1>
-          <p className="text-white/80 text-lg">Great job learning something new</p>
+            <p className="text-white/80 text-lg mb-6">Great job learning something new</p>
+
+            {quizPercent !== null && (
+              <div className="bg-white/15 backdrop-blur-md rounded-2xl p-5 mb-6 border border-white/20">
+                <div className="flex items-center gap-3 mb-2">
+                  <Trophy size={22} className="text-amber-300" />
+                  <span className="text-white font-semibold">Quiz Score</span>
         </div>
+                <p className="text-5xl font-black text-white">{quizPercent}<span className="text-2xl font-bold text-white/60">%</span></p>
+                <p className="text-white/70 text-sm mt-1">{quizCorrect} / {quizTotal} correct</p>
+              </div>
+            )}
+
+            {nextLessons.length > 0 && (
+              <div className="mt-2">
+                <p className="text-white/60 text-xs font-bold uppercase tracking-widest mb-4 text-left">What to learn next</p>
+                <div className="space-y-3">
+                  {nextLessons.map((next: LessonStub) => (
+                    <button
+                      key={next.id}
+                      onClick={() => navigate(`/lesson/${next.id}`)}
+                      className="w-full flex items-center gap-3 p-4 rounded-2xl bg-white/15 hover:bg-white/25 border border-white/20 transition-all text-left"
+                    >
+                      <div
+                        className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 text-white font-bold"
+                        style={{ background: next.themeColor || '#FF6B35' }}
+                      >
+                        {next.title.charAt(0)}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-white font-semibold text-sm truncate">{next.title}</p>
+                        {next.description && (
+                          <p className="text-white/50 text-xs truncate">{next.description}</p>
+                        )}
+                      </div>
+                      <ArrowRight size={18} className="text-white/60 flex-shrink-0" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </main>
       </div>
     )
   }
@@ -775,7 +1062,16 @@ export default function LessonPage() {
             <X size={24} className="text-bloom-text" />
           </button>
           <div className="flex-1">
+            {isQuizModule ? (
+              <div className="flex items-center gap-2">
             <ProgressBar progress={progress} color="green" animated />
+                <span className="text-xs font-bold text-amber-600 whitespace-nowrap bg-amber-50 border border-amber-200 rounded-full px-2.5 py-1">
+                  🏆 Quiz
+                </span>
+              </div>
+            ) : (
+              <ProgressBar progress={progress} color="green" animated />
+            )}
           </div>
           <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-gradient-to-r from-amber-50 to-yellow-50 border border-amber-200/50">
             <span className="font-bold text-amber-700">{stats?.energy ?? 5}</span>
@@ -802,7 +1098,20 @@ export default function LessonPage() {
                 selectedAnswer={selectedAnswer}
                 isCorrect={isCorrect}
                 showExplanation={showExplanation}
+                hasChecked={hasChecked}
+                multiSelectChosen={multiSelectChosen}
+                fillBlankInput={fillBlankInput}
+                wordArrangeSelected={wordArrangeSelected}
+                wordArrangeRemaining={wordArrangeRemaining}
                 onAnswerSelect={handleAnswerSelect}
+                onMultiSelectToggle={handleMultiSelectToggle}
+                onCheckMultiSelect={handleCheckMultiSelect}
+                onFillBlankChange={setFillBlankInput}
+                onCheckFillBlank={handleCheckFillBlank}
+                onWordArrangeInit={handleWordArrangeInit}
+                onWordArrangeSelect={handleWordArrangeSelect}
+                onWordArrangeDeselect={handleWordArrangeDeselect}
+                onCheckWordArrange={handleCheckWordArrange}
               />
             )}
           </div>
@@ -1005,7 +1314,20 @@ interface FullPageContentProps {
   selectedAnswer: number | null
   isCorrect: boolean | null
   showExplanation: boolean
+  hasChecked: boolean
+  multiSelectChosen: Set<number>
+  fillBlankInput: string
+  wordArrangeSelected: string[]
+  wordArrangeRemaining: string[]
   onAnswerSelect: (index: number) => void
+  onMultiSelectToggle: (index: number) => void
+  onCheckMultiSelect: () => void
+  onFillBlankChange: (val: string) => void
+  onCheckFillBlank: () => void
+  onWordArrangeInit: (options: string[]) => void
+  onWordArrangeSelect: (word: string) => void
+  onWordArrangeDeselect: (word: string) => void
+  onCheckWordArrange: () => void
 }
 
 function FullPageContent({
@@ -1013,7 +1335,20 @@ function FullPageContent({
   selectedAnswer,
   isCorrect,
   showExplanation,
+  hasChecked,
+  multiSelectChosen,
+  fillBlankInput,
+  wordArrangeSelected,
+  wordArrangeRemaining,
   onAnswerSelect,
+  onMultiSelectToggle,
+  onCheckMultiSelect,
+  onFillBlankChange,
+  onCheckFillBlank,
+  onWordArrangeInit,
+  onWordArrangeSelect,
+  onWordArrangeDeselect,
+  onCheckWordArrange,
 }: FullPageContentProps) {
   const data = content.contentData
 
@@ -1022,10 +1357,11 @@ function FullPageContent({
     return <RichContentRenderer blocks={data.blocks} />
   }
 
-  // ── Question (enhanced with optional rich text) ──
+  // ── Question ──
   if (data.type === 'question') {
-    return (
-      <div className="space-y-5 py-2 animate-slide-up">
+    const format = data.format || 'multiple-choice'
+
+    const questionHeader = (
         <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl p-6 shadow-xl">
           <div className="flex items-start gap-3">
             <div className="w-9 h-9 rounded-lg bg-bloom-orange/20 flex items-center justify-center flex-shrink-0 mt-0.5">
@@ -1040,8 +1376,41 @@ function FullPageContent({
             </h2>
           </div>
         </div>
+    )
 
-        <div className="space-y-3">
+    const explanationBlock = showExplanation && (data.explanation || data.explanationSegments) ? (
+      <div className="p-5 rounded-2xl bg-gradient-to-br from-amber-50 to-yellow-50 border border-amber-200 animate-slide-up">
+        <div className="flex items-center gap-3 mb-3">
+          <div className="w-10 h-10 rounded-xl bg-amber-400 flex items-center justify-center">
+            <Lightbulb size={22} className="text-white" />
+          </div>
+          <span className="font-bold text-amber-900 text-lg">Great insight!</span>
+        </div>
+        <p className="text-amber-800 leading-relaxed">
+          {data.explanationSegments ? (
+            <RichText segments={data.explanationSegments} />
+          ) : (
+            data.explanation
+          )}
+        </p>
+      </div>
+    ) : null
+
+    const wrongFeedback = isCorrect === false && !showExplanation ? (
+      <div className="p-4 rounded-xl bg-red-50 border border-red-200 animate-slide-up">
+        <div className="flex items-center gap-2">
+          <RotateCcw size={16} className="text-red-500" />
+          <p className="text-red-700 font-medium">Not quite — try again!</p>
+        </div>
+      </div>
+    ) : null
+
+    // ── Multiple-choice ──
+    if (format === 'multiple-choice' || format === 'true-false') {
+      return (
+        <div className="space-y-5 py-2 animate-slide-up">
+          {questionHeader}
+          <div className={`space-y-3 ${format === 'true-false' ? 'grid grid-cols-2 gap-3 space-y-0' : ''}`}>
           {data.options.map((option, index) => {
             const isSelected = selectedAnswer === index
             const isCorrectAnswer = index === data.correctIndex
@@ -1053,26 +1422,32 @@ function FullPageContent({
 
             if (showResult) {
               if (isCorrectAnswer) {
-                bgStyles =
-                  'bg-gradient-to-r from-emerald-50 to-green-50 border-emerald-400 shadow-emerald-100 shadow-md'
+                  bgStyles = 'bg-gradient-to-r from-emerald-50 to-green-50 border-emerald-400 shadow-emerald-100 shadow-md'
                 textColor = 'text-emerald-800'
-                iconElement = (
-                  <div className="w-8 h-8 rounded-full bg-emerald-500 flex items-center justify-center animate-pop-in">
-                    <Check size={18} className="text-white" strokeWidth={3} />
-                  </div>
-                )
+                  iconElement = <div className="w-8 h-8 rounded-full bg-emerald-500 flex items-center justify-center animate-pop-in"><Check size={18} className="text-white" strokeWidth={3} /></div>
               } else if (isSelected) {
                 bgStyles = 'bg-red-50 border-red-300'
                 textColor = 'text-red-700'
-                iconElement = (
-                  <div className="w-8 h-8 rounded-full bg-red-400 flex items-center justify-center animate-shake">
-                    <X size={18} className="text-white" strokeWidth={3} />
-                  </div>
-                )
+                  iconElement = <div className="w-8 h-8 rounded-full bg-red-400 flex items-center justify-center animate-shake"><X size={18} className="text-white" strokeWidth={3} /></div>
               } else {
                 bgStyles = 'bg-slate-50 border-slate-200 opacity-50'
               }
             }
+
+              if (format === 'true-false') {
+                const isTrueBtn = index === 0
+                return (
+                  <button
+                    key={index}
+                    onClick={() => onAnswerSelect(index)}
+                    disabled={selectedAnswer !== null}
+                    className={`w-full p-5 rounded-2xl border-2 flex flex-col items-center gap-2 transition-all duration-300 font-bold text-lg ${bgStyles}`}
+                  >
+                    <span className="text-3xl">{isTrueBtn ? '✓' : '✗'}</span>
+                    <span className={textColor}>{option}</span>
+                  </button>
+                )
+              }
 
             return (
               <button
@@ -1082,23 +1457,11 @@ function FullPageContent({
                 className={`w-full p-4 rounded-xl border-2 text-left transition-all duration-300 ${bgStyles}`}
               >
                 <div className="flex items-center gap-4">
-                  <div
-                    className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-lg flex-shrink-0 ${
-                      showResult && isCorrectAnswer
-                        ? 'bg-emerald-500 text-white'
-                        : showResult && isSelected
-                        ? 'bg-red-400 text-white'
-                        : 'bg-slate-100 text-slate-600'
-                    }`}
-                  >
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-lg flex-shrink-0 ${showResult && isCorrectAnswer ? 'bg-emerald-500 text-white' : showResult && isSelected ? 'bg-red-400 text-white' : 'bg-slate-100 text-slate-600'}`}>
                     {String.fromCharCode(65 + index)}
                   </div>
                   <span className={`flex-1 font-medium ${textColor}`}>
-                    {data.optionSegments?.[index] ? (
-                      <RichText segments={data.optionSegments[index]} />
-                    ) : (
-                      option
-                    )}
+                      {data.optionSegments?.[index] ? <RichText segments={data.optionSegments[index]} /> : option}
                   </span>
                   {iconElement}
                 </div>
@@ -1106,32 +1469,211 @@ function FullPageContent({
             )
           })}
         </div>
+          {wrongFeedback}
+          {explanationBlock}
+        </div>
+      )
+    }
 
-        {/* Wrong answer feedback */}
-        {isCorrect === false && (
-          <div className="p-4 rounded-xl bg-red-50 border border-red-200 animate-slide-up">
-            <p className="text-red-700 font-medium">Not quite — try again!</p>
+    // ── Multi-select ──
+    if (format === 'multi-select') {
+      return (
+        <div className="space-y-5 py-2 animate-slide-up">
+          {questionHeader}
+          <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Select all that apply</p>
+          <div className="space-y-3">
+            {data.options.map((option, index) => {
+              const isChosen = multiSelectChosen.has(index)
+              const correctSet = new Set(data.correctIndices || [])
+              const isCorrectOption = correctSet.has(index)
+
+              let bgStyles = `border-2 transition-all duration-200 ${isChosen ? 'border-indigo-400 bg-indigo-50' : 'border-slate-200 bg-white hover:border-indigo-300'}`
+              if (hasChecked) {
+                if (isCorrectOption) bgStyles = 'border-2 border-emerald-400 bg-emerald-50'
+                else if (isChosen) bgStyles = 'border-2 border-red-300 bg-red-50'
+                else bgStyles = 'border-2 border-slate-200 bg-slate-50 opacity-50'
+              }
+
+              return (
+                <button
+                  key={index}
+                  onClick={() => onMultiSelectToggle(index)}
+                  disabled={hasChecked}
+                  className={`w-full p-4 rounded-xl text-left ${bgStyles}`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={`w-6 h-6 rounded flex items-center justify-center border-2 transition-all ${isChosen ? 'border-indigo-500 bg-indigo-500' : 'border-slate-300'}`}>
+                      {isChosen && <Check size={14} className="text-white" strokeWidth={3} />}
           </div>
-        )}
+                    <span className={`flex-1 font-medium ${hasChecked && isCorrectOption ? 'text-emerald-800' : hasChecked && isChosen ? 'text-red-700' : 'text-bloom-text'}`}>
+                      {option}
+                    </span>
+                    {hasChecked && isCorrectOption && <Check size={18} className="text-emerald-500" strokeWidth={3} />}
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+          {!hasChecked && (
+            <button
+              onClick={onCheckMultiSelect}
+              disabled={multiSelectChosen.size === 0}
+              className="w-full py-4 rounded-xl bg-indigo-600 text-white font-bold text-lg hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+            >
+              Check Answer
+            </button>
+          )}
+          {wrongFeedback}
+          {explanationBlock}
+        </div>
+      )
+    }
 
-        {/* Correct answer explanation */}
-        {showExplanation && (data.explanation || data.explanationSegments) && (
-          <div className="p-5 rounded-2xl bg-gradient-to-br from-amber-50 to-yellow-50 border border-amber-200 animate-slide-up">
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-10 h-10 rounded-xl bg-amber-400 flex items-center justify-center">
-                <Lightbulb size={22} className="text-white" />
+    // ── Fill-in-the-blank ──
+    if (format === 'fill-blank') {
+      return (
+        <div className="space-y-5 py-2 animate-slide-up">
+          {questionHeader}
+          <div className="space-y-3">
+            <input
+              type="text"
+              value={fillBlankInput}
+              onChange={e => onFillBlankChange(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && !hasChecked && fillBlankInput.trim()) onCheckFillBlank() }}
+              disabled={hasChecked && isCorrect === true}
+              placeholder="Type your answer…"
+              className={`w-full px-5 py-4 text-xl rounded-2xl border-2 outline-none transition-all font-medium
+                ${hasChecked && isCorrect === true ? 'border-emerald-400 bg-emerald-50 text-emerald-800' :
+                  hasChecked && isCorrect === false ? 'border-red-300 bg-red-50 text-red-700' :
+                  'border-slate-200 bg-white focus:border-indigo-400 text-bloom-text'}`}
+              autoFocus
+            />
+            {hasChecked && isCorrect === true && (
+              <div className="flex items-center gap-2 text-emerald-700">
+                <Check size={18} strokeWidth={3} />
+                <span className="font-semibold">Correct!</span>
               </div>
-              <span className="font-bold text-amber-900 text-lg">Great insight!</span>
+            )}
+            {hasChecked && isCorrect === false && (
+              <div className="p-3 rounded-xl bg-red-50 border border-red-200">
+                <p className="text-red-700 font-medium text-sm">
+                  The correct answer is: <span className="font-bold">{data.correctAnswer}</span>
+                </p>
             </div>
-            <p className="text-amber-800 leading-relaxed">
-              {data.explanationSegments ? (
-                <RichText segments={data.explanationSegments} />
-              ) : (
-                data.explanation
-              )}
+            )}
+          </div>
+          {!hasChecked && (
+            <button
+              onClick={onCheckFillBlank}
+              disabled={!fillBlankInput.trim()}
+              className="w-full py-4 rounded-xl bg-indigo-600 text-white font-bold text-lg hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2"
+            >
+              <CornerDownLeft size={20} />
+              Check Answer
+            </button>
+          )}
+          {wrongFeedback}
+          {explanationBlock}
+        </div>
+      )
+    }
+
+    // ── Word-arrange ──
+    if (format === 'word-arrange') {
+      // Initialize on first render
+      if (wordArrangeRemaining.length === 0 && wordArrangeSelected.length === 0 && data.options.length > 0) {
+        onWordArrangeInit(data.options)
+      }
+
+      return (
+        <div className="space-y-5 py-2 animate-slide-up">
+          {questionHeader}
+
+          {/* Answer area */}
+          <div className="min-h-[64px] p-4 rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 flex flex-wrap gap-2 items-center">
+            {wordArrangeSelected.length === 0 ? (
+              <span className="text-slate-400 text-sm">Tap words below to arrange them here…</span>
+            ) : (
+              wordArrangeSelected.map((word, i) => (
+                <button
+                  key={i}
+                  onClick={() => onWordArrangeDeselect(word)}
+                  disabled={hasChecked}
+                  className={`px-3 py-1.5 rounded-xl border-2 font-medium text-sm transition-all
+                    ${hasChecked && isCorrect ? 'border-emerald-400 bg-emerald-100 text-emerald-800' :
+                      hasChecked ? 'border-red-300 bg-red-100 text-red-700' :
+                      'border-indigo-400 bg-indigo-100 text-indigo-800 hover:bg-indigo-200'}`}
+                >
+                  {word}
+                </button>
+              ))
+            )}
+          </div>
+
+          {/* Available chips */}
+          <div className="flex flex-wrap gap-2">
+            {wordArrangeRemaining.map((word, i) => (
+              <button
+                key={i}
+                onClick={() => onWordArrangeSelect(word)}
+                disabled={hasChecked}
+                className="px-3 py-1.5 rounded-xl border-2 border-slate-300 bg-white font-medium text-sm text-bloom-text hover:border-indigo-400 hover:bg-indigo-50 transition-all"
+              >
+                {word}
+              </button>
+            ))}
+          </div>
+
+          {!hasChecked && (
+            <button
+              onClick={onCheckWordArrange}
+              disabled={wordArrangeSelected.length === 0}
+              className="w-full py-4 rounded-xl bg-indigo-600 text-white font-bold text-lg hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+            >
+              Check Answer
+            </button>
+          )}
+
+          {hasChecked && isCorrect === false && (
+            <div className="p-3 rounded-xl bg-red-50 border border-red-200">
+              <p className="text-red-700 font-medium text-sm">
+                Correct order: <span className="font-bold">{data.correctAnswer}</span>
             </p>
           </div>
         )}
+          {wrongFeedback}
+          {explanationBlock}
+        </div>
+      )
+    }
+
+    // Fallback: render as multiple-choice
+    return (
+      <div className="space-y-5 py-2 animate-slide-up">
+        {questionHeader}
+        <div className="space-y-3">
+          {data.options.map((option, index) => {
+            const isSelected = selectedAnswer === index
+            const isCorrectAnswer = index === data.correctIndex
+            const showResult = selectedAnswer !== null
+            let bgStyles = 'bg-white border-slate-200 hover:border-bloom-blue hover:shadow-md'
+            let textColor = 'text-bloom-text'
+            if (showResult) {
+              if (isCorrectAnswer) { bgStyles = 'bg-emerald-50 border-emerald-400'; textColor = 'text-emerald-800' }
+              else if (isSelected) { bgStyles = 'bg-red-50 border-red-300'; textColor = 'text-red-700' }
+              else { bgStyles = 'bg-slate-50 border-slate-200 opacity-50' }
+            }
+            return (
+              <button key={index} onClick={() => onAnswerSelect(index)} disabled={selectedAnswer !== null}
+                className={`w-full p-4 rounded-xl border-2 text-left transition-all ${bgStyles}`}
+              >
+                <span className={`font-medium ${textColor}`}>{option}</span>
+              </button>
+            )
+          })}
+        </div>
+        {wrongFeedback}
+        {explanationBlock}
       </div>
     )
   }

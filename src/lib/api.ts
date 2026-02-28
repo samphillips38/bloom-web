@@ -101,6 +101,9 @@ export interface LessonWithContent extends Lesson {
   authorName?: string
   authorAvatarUrl?: string | null
   creatorName?: string
+  prerequisites?: LessonStub[]
+  nextLessons?: LessonStub[]
+  userProgress?: UserProgress
 }
 
 export interface LessonContent {
@@ -140,9 +143,16 @@ export type ContentBlock =
   | { type: 'spacer'; size?: 'sm' | 'md' | 'lg' }
   | { type: 'divider' }
 
+export type QuestionFormat =
+  | 'multiple-choice'
+  | 'true-false'
+  | 'multi-select'
+  | 'fill-blank'
+  | 'word-arrange'
+
 export type ContentData =
   | { type: 'page'; blocks: ContentBlock[] }
-  | { type: 'question'; question: string; questionSegments?: TextSegment[]; options: string[]; optionSegments?: TextSegment[][]; correctIndex: number; explanation?: string; explanationSegments?: TextSegment[] }
+  | { type: 'question'; format?: QuestionFormat; question: string; questionSegments?: TextSegment[]; options: string[]; optionSegments?: TextSegment[][]; correctIndex?: number; correctIndices?: number[]; correctAnswer?: string; explanation?: string; explanationSegments?: TextSegment[] }
   // Legacy types for backward compatibility
   | { type: 'text'; text: string; formatting?: { bold?: boolean } }
   | { type: 'image'; url: string; caption?: string }
@@ -152,6 +162,16 @@ export interface UserProgress {
   lessonId: string
   completed: boolean
   score?: number
+  lastPageIndex?: number
+}
+
+export interface LessonStub {
+  id: string
+  title: string
+  description: string | null
+  themeColor: string | null
+  iconUrl: string | null
+  tags: string[]
 }
 
 export interface SourceReference {
@@ -257,7 +277,7 @@ export interface GeneratedLesson {
   modules: GeneratedModule[]
 }
 
-export type GenerationStatus = 'pending' | 'planning' | 'generating' | 'completed' | 'failed'
+export type GenerationStatus = 'pending' | 'planning' | 'reviewing' | 'generating' | 'completed' | 'failed'
 export type GenerationSourceType = 'topic' | 'url' | 'pdf'
 
 export interface GenerationJob {
@@ -474,10 +494,34 @@ class ApiClient {
     return this.request<{ progress: UserProgress[] }>(`/progress/course/${courseId}`)
   }
 
-  async updateProgress(lessonId: string, completed: boolean, score?: number) {
+  async getLessonProgress(lessonId: string) {
+    return this.request<{ progress: UserProgress | null }>(`/progress/lesson/${lessonId}`)
+  }
+
+  async updateProgress(lessonId: string, completed: boolean, score?: number, lastPageIndex?: number) {
     return this.request<{ progress: UserProgress }>('/progress/update', {
       method: 'POST',
-      body: JSON.stringify({ lessonId, completed, score }),
+      body: JSON.stringify({ lessonId, completed, score, lastPageIndex }),
+    })
+  }
+
+  async savePage(lessonId: string, pageIndex: number) {
+    return this.request<{ saved: boolean }>('/progress/save-page', {
+      method: 'POST',
+      body: JSON.stringify({ lessonId, pageIndex }),
+    })
+  }
+
+  async addPrerequisite(lessonId: string, prereqId: string) {
+    return this.request<{ added: boolean }>(`/workshop/lessons/${lessonId}/prerequisites`, {
+      method: 'POST',
+      body: JSON.stringify({ prerequisiteLessonId: prereqId }),
+    })
+  }
+
+  async removePrerequisite(lessonId: string, prereqId: string) {
+    return this.request<{ removed: boolean }>(`/workshop/lessons/${lessonId}/prerequisites/${prereqId}`, {
+      method: 'DELETE',
     })
   }
 
@@ -652,10 +696,10 @@ class ApiClient {
     })
   }
 
-  async generateAIPlan(topic: string, moduleCount?: number) {
+  async generateAIPlan(topic: string) {
     return this.request<{ plan: LessonPlan }>('/workshop/ai-plan', {
       method: 'POST',
-      body: JSON.stringify({ topic, moduleCount }),
+      body: JSON.stringify({ topic }),
     })
   }
 
@@ -709,7 +753,6 @@ class ApiClient {
    */
   async startAIGeneration(data: {
     topic: string
-    moduleCount?: number
     sourceType?: GenerationSourceType
     /** For 'url': the URL string. For 'pdf': pass the File object directly. For 'topic': omit. */
     pdfFile?: File
@@ -722,7 +765,6 @@ class ApiClient {
       form.append('topic', data.topic)
       form.append('sourceType', 'pdf')
       form.append('pdf', data.pdfFile)
-      if (data.moduleCount != null) form.append('moduleCount', String(data.moduleCount))
       if (data.lessonId) form.append('lessonId', data.lessonId)
       // Let the browser set the Content-Type with the correct boundary
       return this.request<{ lessonId: string; jobId: string }>('/workshop/ai-generate', {
