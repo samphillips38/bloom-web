@@ -57,7 +57,7 @@ export default function WorkshopPage() {
       lessonIds.map(async (id) => {
         try {
           const { job } = await api.getGenerationStatus(id)
-          if (job && (job.status === 'pending' || job.status === 'planning' || job.status === 'generating')) {
+          if (job && (job.status === 'pending' || job.status === 'searching' || job.status === 'planning' || job.status === 'reviewing' || job.status === 'generating')) {
             activeJobs[id] = job
           }
         } catch { /* ignore */ }
@@ -79,7 +79,7 @@ export default function WorkshopPage() {
           try {
             const { job } = await api.getGenerationStatus(id)
             if (!job) return
-            if (job.status === 'pending' || job.status === 'planning' || job.status === 'generating') {
+            if (job.status === 'pending' || job.status === 'searching' || job.status === 'planning' || job.status === 'reviewing' || job.status === 'generating') {
               updated[id] = job
             } else if (job.status === 'completed') {
               anyCompleted = true
@@ -318,7 +318,9 @@ function LessonCard({
 
 function GeneratingBadge({ job }: { job: GenerationJob }) {
   const label =
+    job.status === 'searching' ? 'Searching for sources…' :
     job.status === 'planning' ? 'Planning lesson…' :
+    job.status === 'reviewing' ? 'Refining plan…' :
     job.status === 'generating' ? `Generating modules… ${job.totalModules > 0 ? `${job.completedModules}/${job.totalModules}` : ''}` :
     'Queued…'
 
